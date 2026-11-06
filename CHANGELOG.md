@@ -1,3 +1,14 @@
+## Non publié
+
+- **Code sans commentaires** : commentaires Rust (`//`, `/* */`), shell,
+  PowerShell, batch, Python, YAML, systemd, nftables, Tape et `.gitignore`
+  retires du depot (~3 100 lignes). Aucun changement de comportement : l'aide
+  du CLI est conservee (les doc-comments clap sont devenus des attributs
+  `about`/`help`, `docs/COMMANDS.md` reste identique au binaire) et les
+  heredocs/shebangs sont preserves. Seuls subsistent les fichiers ou le
+  commentaire *est* le contenu : `config.example.toml`,
+  `deploy/gw.example.toml`, `.github/PULL_REQUEST_TEMPLATE.md`.
+
 ## v0.7.32 — Mods seuls, onde sur mod actif (2026-11-05)
 
 - **Rail `◀☰` et menu permanent retirés** : la palette `/` (et `F2`) suffit,
