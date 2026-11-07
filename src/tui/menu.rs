@@ -343,7 +343,6 @@ mod tests {
         flatten(TREE, &mut listed);
 
         let src = include_str!("mod.rs");
-        // Commandes dev-only : absentes du menu utilisateur par choix.
         const DEV_ONLY: &[&str] = &["/upgrade"];
         let mut missing = Vec::new();
         for line in src.lines() {

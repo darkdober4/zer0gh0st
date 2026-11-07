@@ -1,20 +1,9 @@
-//! `/upgrade scan` — audit du dépôt pour les développeurs.
-//!
-//! Aucune modification : lecture de git, des sources et de la base de
-//! connaissances, puis écriture d'un rapport dans
-//! `~/.local/share/zer0gh0st/upgrade/audit-<date>.{md,json}`.
-//!
-//! La commande est réservée aux checkouts de développement (`Cargo.toml` +
-//! `.git`, ou `ZER0_DEV=1`) : un utilisateur du binaire release n'en a pas
-//! l'usage et ne doit pas voir ce rapport.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, Result};
 
-/// Fichiers où un `unwrap()` est considéré comme sensible (chemins chauds).
 const HOT_FILES: &[&str] = &[
     "local.rs",
     "vault.rs",
@@ -70,7 +59,6 @@ pub struct Report {
     pub json_path: PathBuf,
 }
 
-/// La commande est-elle disponible ? (checkout de dev ou `ZER0_DEV=1`)
 pub fn is_dev() -> bool {
     if let Ok(v) = std::env::var("ZER0_DEV") {
         let v = v.trim();
@@ -80,7 +68,6 @@ pub fn is_dev() -> bool {
     root.join("Cargo.toml").is_file() && root.join(".git").exists()
 }
 
-/// Lance l'audit complet (lecture seule).
 pub fn scan() -> Result<Report> {
     let root = crate::mods::project_root();
     if !root.join("Cargo.toml").is_file() || !root.join(".git").exists() {
@@ -121,7 +108,6 @@ pub fn scan() -> Result<Report> {
     scan_kb(&mut findings);
     scan_since_tag(&changed_files, &mut findings);
 
-    // Tri : haute d'abord, puis par titre (stable pour le futur `fix`).
     findings.sort_by(|a, b| {
         a.severity
             .cmp(&b.severity)
@@ -215,7 +201,6 @@ fn scan_sources(root: &Path, out: &mut Vec<Finding>) {
         if lines > 900 {
             big_files.push(format!("{rel} ({lines} lignes)"));
         }
-        // Chemin chaud : unwrap/expect concentrés.
         if HOT_FILES.iter().any(|h| rel.ends_with(*h)) && unwrap >= 5 {
             out.push(Finding {
                 id: String::new(),
@@ -292,16 +277,11 @@ fn scan_sources(root: &Path, out: &mut Vec<Finding>) {
     }
 }
 
-/// Une ligne `// …` ressemble-t-elle à du **code désactivé** ?
-///
-/// Heuristique stricte : on ne veut pas classer la prose en « code mort »
-/// (les commentaires de décision/pièges restent intacts). Les commentaires
-/// de doc (`///`, `//!`) ne sont jamais concernés.
 pub fn commented_code(line: &str) -> Option<&str> {
     let t = line.trim_start();
     let rest = t.strip_prefix("//")?;
     if rest.starts_with('/') || rest.starts_with('!') {
-        return None; // doc
+        return None;
     }
     let code = rest.trim();
     if code.is_empty() {
@@ -341,7 +321,6 @@ pub fn commented_code(line: &str) -> Option<&str> {
     if code == "{" || code == "}" || code == "};" {
         return Some(code);
     }
-    // Ligne terminée par `;` avec une syntaxe de code (pas une phrase).
     if code.ends_with(';')
         && (code.contains('(') || code.contains('=') || code.contains("::") || code.contains('!'))
     {
@@ -528,7 +507,6 @@ fn render_json(r: &Report) -> String {
     .unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Résumé court pour le chat.
 pub fn summary(r: &Report) -> String {
     let high = r
         .findings
@@ -585,7 +563,6 @@ mod tests {
         assert!(commented_code("  // }").is_some());
         assert!(commented_code("// pub fn f() {").is_some());
         assert!(commented_code("// foo();").is_some());
-        // Documentation et prose : jamais « code commenté ».
         assert!(commented_code("/// doc publique").is_none());
         assert!(commented_code("//! doc de module").is_none());
         assert!(commented_code("// le serveur fige, ne pas utiliser").is_none());
