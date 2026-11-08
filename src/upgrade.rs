@@ -1,20 +1,9 @@
-//! `/upgrade scan` — audit du dépôt pour les développeurs.
-//!
-//! Aucune modification : lecture de git, des sources et de la base de
-//! connaissances, puis écriture d'un rapport dans
-//! `~/.local/share/zer0gh0st/upgrade/audit-<date>.{md,json}`.
-//!
-//! La commande est réservée aux checkouts de développement (`Cargo.toml` +
-//! `.git`, ou `ZER0_DEV=1`) : un utilisateur du binaire release n'en a pas
-//! l'usage et ne doit pas voir ce rapport.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{anyhow, Result};
 
-/// Fichiers où un `unwrap()` est considéré comme sensible (chemins chauds).
 const HOT_FILES: &[&str] = &[
     "local.rs",
     "vault.rs",
@@ -70,7 +59,6 @@ pub struct Report {
     pub json_path: PathBuf,
 }
 
-/// La commande est-elle disponible ? (checkout de dev ou `ZER0_DEV=1`)
 pub fn is_dev() -> bool {
     if let Ok(v) = std::env::var("ZER0_DEV") {
         let v = v.trim();
@@ -80,7 +68,6 @@ pub fn is_dev() -> bool {
     root.join("Cargo.toml").is_file() && root.join(".git").exists()
 }
 
-/// Lance l'audit complet (lecture seule).
 pub fn scan() -> Result<Report> {
     let root = crate::mods::project_root();
     if !root.join("Cargo.toml").is_file() || !root.join(".git").exists() {
@@ -121,7 +108,6 @@ pub fn scan() -> Result<Report> {
     scan_kb(&mut findings);
     scan_since_tag(&changed_files, &mut findings);
 
-    // Tri : haute d'abord, puis par titre (stable pour le futur `fix`).
     findings.sort_by(|a, b| {
         a.severity
             .cmp(&b.severity)
@@ -192,9 +178,6 @@ fn scan_sources(root: &Path, out: &mut Vec<Finding>) {
         let is_scanner = rel == "src/upgrade.rs";
         let lines = text.lines().count();
 
-        // 1) unwrap/expect : un finding PAR fichier (cible corrigeable).
-        // On ignore les lignes de commentaire : une phrase qui mentionne
-        // `.unwrap()` ne doit pas devenir un finding.
         let code_only: String = production
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
@@ -224,7 +207,6 @@ fn scan_sources(root: &Path, out: &mut Vec<Finding>) {
             });
         }
 
-        // 2) TODO/FIXME/XXX : uniquement dans les commentaires, par fichier.
         if !is_scanner {
             let todo: usize = production
                 .lines()
@@ -247,7 +229,6 @@ fn scan_sources(root: &Path, out: &mut Vec<Finding>) {
             }
         }
 
-        // 3) unsafe réel, par fichier.
         if !is_scanner
             && (code_only.contains("unsafe {")
                 || code_only.contains("unsafe fn ")
@@ -264,7 +245,6 @@ fn scan_sources(root: &Path, out: &mut Vec<Finding>) {
             });
         }
 
-        // 4) code commenté, par fichier.
         let commented: Vec<String> = production
             .lines()
             .enumerate()
@@ -286,7 +266,6 @@ fn scan_sources(root: &Path, out: &mut Vec<Finding>) {
             });
         }
 
-        // 5) gros fichier : refactor manuel, pas une cible de `fix`.
         if lines > 900 {
             out.push(Finding {
                 id: String::new(),
@@ -300,8 +279,6 @@ fn scan_sources(root: &Path, out: &mut Vec<Finding>) {
         }
     }
 }
-/// Partie « production » d'un fichier : tout ce qui précède le **premier**
-/// test, qu'il soit une fonction `#[test]` ou un module `#[cfg(test)]`.
 fn production_part(text: &str) -> &str {
     let mut offset = text.len();
     let mut pos = 0;
@@ -316,15 +293,11 @@ fn production_part(text: &str) -> &str {
     &text[..offset]
 }
 
-/// Une ligne `// …` ressemble-t-elle à du **code désactivé** ?
-///
-/// Heuristique stricte : la prose et la documentation ne doivent jamais être
-/// classées « code mort ».
 pub fn commented_code(line: &str) -> Option<&str> {
     let t = line.trim_start();
     let rest = t.strip_prefix("//")?;
     if rest.starts_with('/') || rest.starts_with('!') {
-        return None; // doc
+        return None;
     }
     let code = rest.trim();
     if code.is_empty() {
@@ -551,7 +524,6 @@ fn render_json(r: &Report) -> String {
     .unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Résumé court pour le chat.
 pub fn summary(r: &Report) -> String {
     let high = r
         .findings
@@ -592,11 +564,6 @@ pub fn summary(r: &Report) -> String {
     s
 }
 
-// ---------------------------------------------------------------------------
-// Phase 2 : `/upgrade fix`
-// ---------------------------------------------------------------------------
-
-/// Finding relu depuis `audit-*.json` (pour le fix).
 #[derive(Debug, Clone)]
 pub struct FindingView {
     pub id: String,
@@ -607,7 +574,6 @@ pub struct FindingView {
     pub effort: String,
 }
 
-/// Dernier audit JSON disponible.
 pub fn latest_json() -> Option<PathBuf> {
     let dir = crate::config::data_dir().join("upgrade");
     std::fs::read_dir(dir)
@@ -618,7 +584,6 @@ pub fn latest_json() -> Option<PathBuf> {
         .max_by_key(|p| p.file_name().map(|n| n.to_os_string()))
 }
 
-/// Findings du dernier audit, dans l'ordre du rapport.
 pub fn findings() -> Result<Vec<FindingView>> {
     let path = latest_json().ok_or_else(|| anyhow!("aucun audit : `/upgrade scan` d'abord"))?;
     let raw = std::fs::read_to_string(&path)?;
@@ -674,17 +639,12 @@ pub fn findings() -> Result<Vec<FindingView>> {
 pub struct FixOutcome {
     pub branch: String,
     pub diff: String,
-    /// Le sous-agent a-t-il modifié au moins un fichier ?
     pub changed: bool,
     pub tests_ok: bool,
     pub tests_tail: String,
     pub message: String,
 }
 
-/// Corrige un finding sur une branche `upgrade/<date>`.
-///
-/// Garde-fous : arbre propre exigé, aucun test modifié, tests lancés après
-/// le patch, **revert automatique** si les tests échouent, aucun commit.
 pub async fn fix(
     finding: &FindingView,
     settings: &crate::config::Settings,
@@ -693,8 +653,6 @@ pub async fn fix(
     options: crate::llm::llama::ChatOptions,
     ui: Option<tokio::sync::mpsc::UnboundedSender<crate::event::UiEvent>>,
 ) -> Result<FixOutcome> {
-    // Un finding qui couvre 8 fichiers n'est pas « une correction » : le
-    // sous-agent répond un plan au lieu d'agir. On refuse tôt.
     if finding.files.is_empty() {
         return Err(anyhow!(
             "finding sans fichier cible (état/refactor) : à traiter à la main"
@@ -804,7 +762,6 @@ pub async fn fix(
     })
 }
 
-/// Fichiers modifiés/non suivis du dépôt.
 pub fn dirty_files() -> Vec<String> {
     git_text(&["status", "--porcelain"])
         .unwrap_or_default()
@@ -814,8 +771,6 @@ pub fn dirty_files() -> Vec<String> {
         .collect()
 }
 
-/// Refuse de travailler sur un arbre sale (le diff serait mélangé), en
-/// listant les fichiers et les issues possibles.
 pub fn ensure_clean_tree() -> Result<()> {
     let files = dirty_files();
     if !files.is_empty() {
@@ -829,7 +784,6 @@ pub fn ensure_clean_tree() -> Result<()> {
     Ok(())
 }
 
-/// Annule les modifications en cours (patch d'un `fix` non commité).
 pub fn revert() -> Result<Vec<String>> {
     let files = dirty_files();
     if files.is_empty() {
@@ -840,7 +794,6 @@ pub fn revert() -> Result<Vec<String>> {
     Ok(files)
 }
 
-/// Résumé de l'état : branche, fichiers sales, dernier audit.
 pub fn status() -> String {
     let branch = git_text(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| "?".into());
     let files = dirty_files();
@@ -866,8 +819,6 @@ fn ensure_branch(branch: &str) -> Result<()> {
         let exists = git_text(&["rev-parse", "--verify", branch]).is_some();
         if exists {
             git_text(&["switch", branch]);
-            // La branche peut dater d'un essai précédent : si `main` a avancé,
-            // on refuse de corriger sur une base périmée.
             let up_to_date = Command::new("git")
                 .current_dir(crate::mods::project_root())
                 .args(["merge-base", "--is-ancestor", "main", "HEAD"])
@@ -903,7 +854,6 @@ fn git_text(args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// `cargo test --offline --lib` avec 2 jobs et un plafond de 15 min.
 async fn run_tests() -> (bool, String) {
     let mut cmd = tokio::process::Command::new("cargo");
     cmd.current_dir(crate::mods::project_root())
@@ -953,7 +903,6 @@ mod tests {
         assert!(p.contains("fn x()"));
         assert!(!p.contains("#[test]"));
         assert!(!p.contains("mod tests"));
-        // Un fichier sans test est pris en entier.
         assert_eq!(production_part("fn y() {}\n"), "fn y() {}\n");
     }
 
@@ -963,7 +912,6 @@ mod tests {
         assert!(commented_code("  // }").is_some());
         assert!(commented_code("// pub fn f() {").is_some());
         assert!(commented_code("// foo();").is_some());
-        // Documentation et prose : jamais « code commenté ».
         assert!(commented_code("/// doc publique").is_none());
         assert!(commented_code("//! doc de module").is_none());
         assert!(commented_code("// le serveur fige, ne pas utiliser").is_none());

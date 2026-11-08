@@ -5,20 +5,12 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::ToolSpec;
 
-/// Octets capturés par flux (stdout/stderr) avant de jeter le reste.
-///
-/// On continue de **lire** au-delà du plafond (sinon l'enfant se bloque sur un
-/// pipe plein), mais sans stocker : la mémoire du processus reste bornée.
 const MAX_CAPTURE_BYTES: usize = 256 * 1024;
-/// Octets réellement renvoyés au modèle (le contexte n'est pas gratuit).
 const MAX_RETURN_BYTES: usize = 16_000;
-/// Délai par défaut, et plafond dur : une commande ne peut pas figer l'agent.
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 const MAX_TIMEOUT_SECS: u64 = 3600;
-/// Fréquence de scrutation du drapeau `/stop`.
 const CANCEL_POLL: Duration = Duration::from_millis(150);
 
-/// Délai par défaut effectif : `ZER0_EXEC_TIMEOUT` (secondes), borné.
 fn default_timeout() -> u64 {
     std::env::var("ZER0_EXEC_TIMEOUT")
         .ok()
@@ -70,8 +62,6 @@ pub async fn run(args: &str) -> String {
     if let Some(dir) = v.get("cwd").and_then(|x| x.as_str()) {
         cmd.current_dir(dir);
     }
-    // stdin fermé : une commande qui attend une saisie échoue au lieu de pendre.
-    // `kill_on_drop` : si l'on abandonne (timeout ou /stop), l'enfant meurt.
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -119,8 +109,6 @@ pub async fn run(args: &str) -> String {
     }
 }
 
-/// Lit un flux jusqu'à EOF en stockant au plus `cap` octets.
-/// Retourne `true` si la sortie a dépassé le plafond.
 async fn drain<R: AsyncRead + Unpin>(r: &mut R, buf: &mut Vec<u8>, cap: usize) -> bool {
     let mut tmp = [0u8; 8 * 1024];
     let mut truncated = false;
@@ -176,7 +164,6 @@ fn render(
             MAX_CAPTURE_BYTES / 1024
         ));
     }
-    // Troncature sûre (frontière UTF-8) avant de polluer le contexte.
     if crate::util::truncate_utf8(&mut text, MAX_RETURN_BYTES) {
         notes.push(format!("affichage limité à {} Ko", MAX_RETURN_BYTES / 1000));
     }
@@ -220,8 +207,6 @@ mod tests {
         assert!(r.contains("commande terminée"));
     }
 
-    /// Régression : une sortie accentuée de plus de 16 Ko déclenchait
-    /// `panic!("assertion failed: self.is_char_boundary")`.
     #[test]
     fn render_multibyte_output_does_not_panic() {
         let mut out = String::from("a");
@@ -259,7 +244,6 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn stdin_is_closed_so_reads_fail_fast() {
-        // `cat` sans stdin doit terminer immédiatement (pas de blocage).
         let r = run(r#"{"command":"cat","timeout_secs":5}"#).await;
         assert!(!r.contains("délai dépassé"), "got: {r}");
     }

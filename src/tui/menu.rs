@@ -1,7 +1,3 @@
-//! Menu latéral de commandes (cliquable et défilable), entre le bloc zero-chan
-//! et le badge 0chan/mic. Les groupes se déplient (`▸`/`▾`) ; une commande sans
-//! argument s'exécute au clic, une commande avec argument s'insère dans la saisie.
-
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -12,20 +8,16 @@ use crate::theme;
 
 pub struct Node {
     pub label: &'static str,
-    /// Commande exécutée/insérée. `None` = groupe (a des enfants).
     pub run: Option<&'static str>,
     pub children: &'static [Node],
 }
 
 #[derive(Clone, Copy)]
 pub enum Hit {
-    /// Déplier/replier un groupe.
     Group(&'static str),
-    /// Exécuter (ou insérer) une commande.
     Cmd(&'static str),
 }
 
-/// Liste plate des commandes (commande, « groupe · libellé ») pour la palette `/`.
 pub fn flat_commands() -> Vec<(String, String)> {
     fn walk(nodes: &'static [Node], group: Option<&str>, out: &mut Vec<(String, String)>) {
         for node in nodes {
@@ -61,7 +53,6 @@ const fn g(label: &'static str, children: &'static [Node]) -> Node {
     }
 }
 
-/// Arbre complet des commandes. Un `run` finissant par un espace attend un argument.
 pub const TREE: &[Node] = &[
     n("help", "/help"),
     n("tools", "/tools"),
@@ -87,7 +78,6 @@ pub const TREE: &[Node] = &[
     n("chats", "/chats"),
     n("login", "/login"),
     n("logout", "/logout"),
-    // Visibles directement (sans déplier le groupe « model »).
     n("model use", "/model use "),
     n("free", "/free"),
     n("quota", "/quota"),
@@ -227,9 +217,7 @@ pub const TREE: &[Node] = &[
     ),
 ];
 
-/// Dessine le menu et remplit `hits` (coordonnées écran). `scroll` est ajusté.
-/// `sel` = index sélectionné au clavier (surbrillance).
-#[allow(dead_code)] // plus de menu permanent : palette `/` et F2
+#[allow(dead_code)]
 pub fn draw(
     f: &mut Frame,
     area: Rect,
@@ -243,7 +231,6 @@ pub fn draw(
         return;
     }
 
-    // Construit toutes les lignes + l'action associée.
     let mut rows: Vec<(Line<'static>, Option<Hit>)> = Vec::new();
     for node in TREE {
         if node.children.is_empty() {
@@ -299,7 +286,6 @@ pub fn draw(
 
     let max_scroll = rows.len().saturating_sub(inner.height as usize) as u16;
     *scroll = (*scroll).min(max_scroll);
-    // Suivre la sélection clavier (la garder visible).
     if let Some(s) = sel {
         let h = inner.height as usize;
         if s < *scroll as usize {
@@ -339,9 +325,6 @@ pub fn draw(
 mod tests {
     use super::*;
 
-    /// Anti-dérive : toute commande gérée dans `mod.rs` doit être dans le menu.
-    /// C'est ce test qui aurait empêché `/codeexec` et `/readwrite` d'être
-    /// invisibles alors qu'ils arment les outils dangereux.
     #[test]
     fn every_tui_command_appears_in_the_menu() {
         fn flatten(nodes: &[Node], out: &mut Vec<String>) {
@@ -360,7 +343,6 @@ mod tests {
         flatten(TREE, &mut listed);
 
         let src = include_str!("mod.rs");
-        // Commandes dev-only : absentes du menu utilisateur par choix.
         const DEV_ONLY: &[&str] = &["/upgrade"];
         let mut missing = Vec::new();
         for line in src.lines() {
@@ -389,14 +371,11 @@ mod tests {
         assert!(cmds.len() > 10, "palette trop pauvre : {}", cmds.len());
         assert!(cmds.iter().any(|(c, _)| c == "/model"));
         assert!(cmds.iter().any(|(c, _)| c == "/provider"));
-        // présentes en direct dans le menu défilable
         assert!(cmds.iter().any(|(c, _)| c == "/model use "));
         assert!(cmds.iter().any(|(c, _)| c == "/free"));
-        // les sous-commandes portent le groupe dans le libellé
         assert!(cmds
             .iter()
             .any(|(c, l)| c == "/role off" && l.contains('·')));
-        // pas de doublon de commande
         let mut codes: Vec<&String> = cmds.iter().map(|(c, _)| c).collect();
         codes.sort();
         let before = codes.len();

@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use lopdf::{dictionary, Document, Object, ObjectId};
 use std::collections::BTreeMap;
 
-/// Basic PDF info.
 pub fn info(path: &str) -> Result<String> {
     let doc = Document::load(path)?;
     let pages = doc.get_pages().len();
@@ -27,7 +26,6 @@ pub fn info(path: &str) -> Result<String> {
     Ok(s)
 }
 
-/// Extract text (uses pdf-extract).
 pub fn text(path: &str) -> Result<String> {
     let t = pdf_extract::extract_text(path)?;
     let t = t.trim();
@@ -43,7 +41,6 @@ pub fn text(path: &str) -> Result<String> {
     }
 }
 
-/// Split: keep pages `first..=last` into a new PDF.
 pub fn split(path: &str, output: &str, first: u32, last: u32) -> Result<String> {
     let mut doc = Document::load(path)?;
     let pages: Vec<u32> = doc.get_pages().keys().cloned().collect();
@@ -59,7 +56,6 @@ pub fn split(path: &str, output: &str, first: u32, last: u32) -> Result<String> 
     Ok(format!("Pages {first}-{last} extraites → {output}"))
 }
 
-/// Merge several PDFs into one.
 pub fn merge(inputs: &[String], output: &str) -> Result<String> {
     if inputs.len() < 2 {
         return Err(anyhow!("merge : au moins 2 fichiers requis"));
