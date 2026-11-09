@@ -33,6 +33,7 @@ run-zer0-gw.ps1
 *.bin
 
 /data
+/audits
 /0box-test
 /knowledge.db
 /knowledge.db-*
