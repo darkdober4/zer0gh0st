@@ -1,6 +1,3 @@
-//! Outil email : expose les actions IMAP/SMTP à l'agent via JSON.
-//! Les permissions et l'audit sont gérés par `EmailService`.
-
 use serde_json::json;
 
 use super::ToolSpec;
@@ -57,7 +54,6 @@ pub fn spec() -> ToolSpec {
     }
 }
 
-/// Décodage base64 des pièces jointes.
 fn decode_attachments(
     v: &serde_json::Value,
 ) -> Result<Vec<crate::email::types::AttachmentInput>, String> {
@@ -93,7 +89,6 @@ fn decode_attachments(
     Ok(out)
 }
 
-/// Construit un EmailAction depuis les arguments JSON de l'agent.
 fn parse_action(v: &serde_json::Value) -> Result<EmailAction, String> {
     let action = v
         .get("action")

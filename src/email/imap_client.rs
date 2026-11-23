@@ -1,7 +1,3 @@
-//! Client IMAP (read / manage).
-//! Connexion TLS, login, list, fetch, search, store, copy, expunge.
-//! Aucun secret n'est loggué.
-
 use crate::email::config::EmailConfig;
 use crate::email::error::EmailError;
 use crate::email::parser::parse_email;
@@ -16,13 +12,11 @@ use tracing::debug;
 
 type TlsStream = tokio_rustls::client::TlsStream<TcpStream>;
 
-/// Client IMAP avec session active.
 pub struct ImapClient {
     session: Session<TlsStream>,
 }
 
 impl ImapClient {
-    /// Crée une nouvelle connexion IMAP TLS et s'authentifie.
     pub async fn new(config: &EmailConfig) -> Result<Self, EmailError> {
         let addr = format!("{}:{}", config.imap_host, config.imap_port);
         debug!("Connexion IMAP à {}", addr);
@@ -58,7 +52,6 @@ impl ImapClient {
         Ok(Self { session })
     }
 
-    /// Liste les dossiers IMAP.
     pub async fn list_folders(&mut self) -> Result<Vec<String>, EmailError> {
         let mut names = self
             .session
@@ -86,7 +79,6 @@ impl ImapClient {
         Ok(folders)
     }
 
-    /// Liste les messages d'un dossier avec pagination.
     pub async fn list_messages(
         &mut self,
         mailbox: &str,
@@ -110,7 +102,6 @@ impl ImapClient {
         self.fetch_range(mailbox, start, end).await
     }
 
-    /// Récupère un message par UID.
     pub async fn get_message(
         &mut self,
         mailbox: &str,
@@ -143,7 +134,6 @@ impl ImapClient {
         Ok(email)
     }
 
-    /// Recherche des messages.
     pub async fn search(
         &mut self,
         mailbox: &str,
@@ -172,7 +162,6 @@ impl ImapClient {
         Ok(results)
     }
 
-    /// Ajoute ou retire des flags.
     pub async fn set_flags(
         &mut self,
         mailbox: &str,
@@ -186,7 +175,6 @@ impl ImapClient {
             .map_err(|e| EmailError::Imap(format!("SELECT échoué: {}", e)))?;
 
         let action = if add { "+FLAGS" } else { "-FLAGS" };
-        // Validation basique : chaque flag doit être un token IMAP sûr.
         for f in &flags {
             if f.is_empty() || f.contains(' ') || f.contains('(') || f.contains(')') {
                 return Err(EmailError::Guardrail(format!("Flag invalide: {}", f)));
@@ -199,7 +187,6 @@ impl ImapClient {
             .uid_store(uid.to_string(), query)
             .await
             .map_err(|e| EmailError::Imap(format!("UID STORE échoué: {}", e)))?;
-        // Drain le stream pour consommer la réponse du serveur.
         while let Some(item) = store_stream.next().await {
             item.map_err(|e| EmailError::Imap(format!("STORE stream échoué: {}", e)))?;
         }
@@ -208,7 +195,6 @@ impl ImapClient {
         Ok(())
     }
 
-    /// Déplace un message vers un autre dossier.
     pub async fn move_message(
         &mut self,
         mailbox: &str,
@@ -232,7 +218,6 @@ impl ImapClient {
         Ok(())
     }
 
-    /// Supprime un message (avec garde-fou expunge).
     pub async fn delete_message(
         &mut self,
         mailbox: &str,
@@ -250,11 +235,10 @@ impl ImapClient {
                 .uid_store(uid.to_string(), "+FLAGS (\\Deleted)")
                 .await
                 .map_err(|e| EmailError::Imap(format!("UID STORE échoué: {}", e)))?;
-            // Drain le stream pour consommer la réponse du serveur.
             while let Some(item) = del_stream.next().await {
                 item.map_err(|e| EmailError::Imap(format!("STORE stream échoué: {}", e)))?;
             }
-        } // del_stream droppé ici, libère l'emprunt de self.session
+        }
 
         if expunge {
             let mut exp_stream = std::pin::pin!(self
@@ -262,7 +246,6 @@ impl ImapClient {
                 .expunge()
                 .await
                 .map_err(|e| EmailError::Imap(format!("EXPUNGE échoué: {}", e)))?);
-            // Drain le stream pour consommer la réponse du serveur.
             while let Some(item) = exp_stream.next().await {
                 item.map_err(|e| EmailError::Imap(format!("EXPUNGE stream échoué: {}", e)))?;
             }
@@ -274,7 +257,6 @@ impl ImapClient {
         Ok(())
     }
 
-    /// Déconnexion propre.
     pub async fn logout(&mut self) -> Result<(), EmailError> {
         self.session
             .logout()
@@ -282,16 +264,12 @@ impl ImapClient {
             .map_err(|e| EmailError::Imap(format!("LOGOUT échoué: {}", e)))
     }
 
-    /// Fetch d'une plage de messages (helper interne).
     async fn fetch_range(
         &mut self,
         mailbox: &str,
         start: u32,
         end: u32,
     ) -> Result<Vec<EmailSummary>, EmailError> {
-        // `start`/`end` sont des numéros de séquence (1..=total) : on utilise
-        // FETCH (et non UID FETCH), sinon les UID réels (souvent ≫ total sur
-        // Gmail) ne correspondent à rien et la liste revient vide.
         let range = format!("{}:{}", start, end);
         let mut fetch = self
             .session

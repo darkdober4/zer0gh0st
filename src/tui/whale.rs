@@ -1,20 +1,3 @@
-//! Animation « baleine deepseek » : un overlay joué quand le modèle actif
-//! devient un `deepseek`. La baleine sort de l'eau, décrit un arc, puis plonge
-//! dans le profond en laissant une gerbe puis des bulles.
-//!
-//! Choix assumés :
-//! - **Tout en cellules** (demi-blocs `▀▄█`, `~≈-`, `░▒`) : aucun pixel hors
-//!   d'une cellule, donc c'est portable sur n'importe quel terminal et ça ne
-//!   dépend d'aucun protocole graphique.
-//! - **Rien que du `f(t)`** : pas d'état par frame, pas d'aléatoire. La
-//!   géométrie est une fonction du temps, ce qui rend chaque image reproductible
-//!   et testable (le prototype est `tools/whale_preview.py`).
-//! - **Aspect 2:1** : une cellule est deux fois plus haute que large ; la
-//!   silhouette est donc échantillonnée en conséquence, sinon la baleine
-//!   paraîtrait écrasée.
-//! - **Pas de rotation de glyphes** : la baleine est une silhouette rasterisée,
-//!   pivotée mathématiquement (`pitch`) avant rastérisation.
-
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
@@ -22,16 +5,11 @@ use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Frame;
 use std::time::{Duration, Instant};
 
-/// Durée totale du plan (émergence → profondeur).
 pub const DURATION: Duration = Duration::from_millis(3_200);
-/// Largeur du sprite, en cellules.
 pub const SPRITE_COLS: u16 = 22;
-/// Hauteur du sprite, en cellules.
 pub const SPRITE_ROWS: u16 = 6;
-/// Sous-lignes par cellule (demi-blocs).
 const SUB_ROWS: u16 = SPRITE_ROWS * 2;
 
-// Cache de l'animation seulement si elle a un sens.
 const MIN_WIDTH: u16 = 44;
 const MIN_HEIGHT: u16 = 12;
 
@@ -43,7 +21,6 @@ const SEA: Color = Color::Rgb(46, 134, 194);
 const DEEP: Color = Color::Rgb(4, 13, 24);
 const FOAM: Color = Color::Rgb(176, 240, 255);
 
-// Types de matière renvoyés par `whale_shape` (index de couleur).
 const M_BACK: u8 = 1;
 const M_BELLY: u8 = 2;
 const M_FLUKE: u8 = 3;
@@ -51,12 +28,10 @@ const M_FIN: u8 = 4;
 const M_DORSAL: u8 = 5;
 const M_EYE: u8 = 9;
 
-/// Le modèle déclenche-t-il l'animation ? (comparaison insensible à la casse)
 pub fn wanted(model: &str) -> bool {
     model.to_ascii_lowercase().contains("deepseek")
 }
 
-/// Une animation en cours : uniquement son instant de départ.
 #[derive(Debug, Clone)]
 pub struct Whale {
     t0: Instant,
@@ -71,7 +46,6 @@ impl Whale {
         }
     }
 
-    /// Départ antidaté (tests, rejeu).
     pub fn from_start(t0: Instant) -> Self {
         Self {
             t0,
@@ -79,7 +53,6 @@ impl Whale {
         }
     }
 
-    /// Progression dans `[0, 1]`.
     pub fn progress(&self) -> f32 {
         let total = self.duration.as_secs_f32().max(0.001);
         (self.t0.elapsed().as_secs_f32() / total).clamp(0.0, 1.0)
@@ -89,7 +62,6 @@ impl Whale {
         self.t0.elapsed() >= self.duration
     }
 
-    /// Libellé de la phase courante (affiché en bas de l'overlay).
     pub fn label(&self) -> &'static str {
         label_for(self.progress() / 0.94)
     }
@@ -115,9 +87,6 @@ fn label_for(phase: f32) -> &'static str {
     }
 }
 
-// ── Silhouette ───────────────────────────────────────────────────────────────
-// Coordonnées locales : `x` de 0 (pointe de la caudale) à 1 (bout du museau),
-// `y` de 0 (dos) à 1 (ventre). Deux profils interpolés = un cétacé lisible.
 const TOP: [(f32, f32); 10] = [
     (0.00, 0.42),
     (0.10, 0.39),
@@ -156,16 +125,13 @@ fn interp(pts: &[(f32, f32)], x: f32) -> f32 {
     pts[pts.len() - 1].1
 }
 
-/// Matière d'un point local (0 = vide). Fonction pure : testable sans terminal.
 pub fn whale_shape(x: f32, y: f32) -> u8 {
-    // corps : dos, ventre, et museau arrondi
     if (0.06..=1.0).contains(&x) {
         let (top, bot) = (interp(&TOP, x), interp(&BOT, x));
         if (top..=bot).contains(&y) {
             return if y > bot - 0.13 { M_BELLY } else { M_BACK };
         }
     }
-    // caudale : éventail vertical fourchu à gauche
     if x <= 0.17 {
         let spread = 0.26 * (1.0 - x / 0.17) + 0.03;
         let d = (y - 0.44).abs();
@@ -173,7 +139,6 @@ pub fn whale_shape(x: f32, y: f32) -> u8 {
             return M_FLUKE;
         }
     }
-    // dorsale : petit aileron sur le dos
     if (0.42..=0.54).contains(&x) {
         let t = (x - 0.42) / 0.12;
         let top = interp(&TOP, x);
@@ -181,7 +146,6 @@ pub fn whale_shape(x: f32, y: f32) -> u8 {
             return M_DORSAL;
         }
     }
-    // pectorale : triangle sous le ventre
     if (0.58..=0.74).contains(&x) {
         let t = (0.74 - x) / 0.16;
         let bot = interp(&BOT, x);
@@ -192,10 +156,8 @@ pub fn whale_shape(x: f32, y: f32) -> u8 {
     0
 }
 
-/// Une cellule du sprite : (glyphe, matière).
 pub type SpriteCell = (char, u8);
 
-/// Rasterise la baleine pivotée de `pitch` (radians) en demi-blocs.
 pub fn rasterize(pitch: f32) -> Vec<Vec<SpriteCell>> {
     let mut out = vec![vec![(' ', 0u8); SPRITE_COLS as usize]; SPRITE_ROWS as usize];
     let (sin_p, cos_p) = (-pitch).sin_cos();
@@ -205,7 +167,6 @@ pub fn rasterize(pitch: f32) -> Vec<Vec<SpriteCell>> {
             for (half, slot) in mat.iter_mut().enumerate() {
                 let lx = (col as f32 + 0.5) / SPRITE_COLS as f32;
                 let ly = (row as f32 * 2.0 + half as f32 + 0.5) / SUB_ROWS as f32;
-                // rotation inverse autour du centre de la silhouette
                 let (dx, dy) = (lx - 0.5, ly - 0.5);
                 let rx = dx * cos_p - dy * sin_p + 0.5;
                 let ry = dx * sin_p + dy * cos_p + 0.5;
@@ -221,7 +182,6 @@ pub fn rasterize(pitch: f32) -> Vec<Vec<SpriteCell>> {
             *cell = (glyph, kind);
         }
     }
-    // œil : une demi-cellule sombre près du museau
     let (ec, er) = (
         (SPRITE_COLS as f32 * 0.88) as usize,
         (SPRITE_ROWS as f32 * 0.55) as usize,
@@ -234,9 +194,6 @@ pub fn rasterize(pitch: f32) -> Vec<Vec<SpriteCell>> {
     out
 }
 
-// ── Trajectoire ──────────────────────────────────────────────────────────────
-
-/// Position (coin haut-gauche, en cellules flottantes) et inclinaison.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pose {
     pub x: f32,
@@ -244,15 +201,10 @@ pub struct Pose {
     pub pitch: f32,
 }
 
-/// Ligne d'eau dans la zone intérieure de l'overlay.
 pub fn sea_line(inner: Rect) -> u16 {
     inner.y + (inner.height.saturating_sub(1) * 7 / 10)
 }
 
-/// Trajectoire paramétrique. `phase` ∈ `[0, 1]`.
-///
-/// 0 → 0,14 poussée sous l'eau · 0,14 → 0,46 montée · 0,46 → 0,62 apex ·
-/// 0,62 → 0,88 plongée · 0,88 → 1 disparition dans le profond.
 pub fn pose(phase: f32, inner: Rect) -> Pose {
     let phase = phase.clamp(0.0, 1.0);
     let sea = sea_line(inner) as f32;
@@ -302,8 +254,6 @@ pub fn pose(phase: f32, inner: Rect) -> Pose {
     }
 }
 
-// ── Rendu ────────────────────────────────────────────────────────────────────
-
 fn lerp(a: Color, b: Color, t: f32) -> Color {
     let t = t.clamp(0.0, 1.0);
     match (a, b) {
@@ -337,12 +287,10 @@ fn put_str(buf: &mut Buffer, x: u16, y: u16, s: &str, color: Color) {
     }
 }
 
-/// Rectangle de l'overlay, centré : 64×16 au plus, avec une marge.
 pub fn overlay_rect(area: Rect) -> Option<Rect> {
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         return None;
     }
-    // Marge de 2 colonnes / 1 ligne pour que l'overlay reste un *overlay*.
     let w = 64.min(area.width.saturating_sub(4));
     let h = 16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width - w) / 2;
@@ -350,7 +298,6 @@ pub fn overlay_rect(area: Rect) -> Option<Rect> {
     Some(Rect::new(x, y, w, h))
 }
 
-/// Dessine l'animation. Ne fait rien si l'écran est trop petit.
 pub fn draw(f: &mut Frame, area: Rect, whale: &Whale) {
     let Some(rect) = overlay_rect(area) else {
         return;
@@ -377,7 +324,6 @@ pub fn draw(f: &mut Frame, area: Rect, whale: &Whale) {
     let head = draw_sprite(buf, inner, sea, phase);
     draw_splash(buf, inner, sea, t);
     draw_bubbles(buf, inner, sea, t, head);
-    // Libellé en haut à gauche : le bas de l'overlay est occupé par la plongée.
     put_str(
         buf,
         inner.x + 2,
@@ -415,7 +361,6 @@ fn draw_sea(buf: &mut Buffer, inner: Rect, sea: u16, secs: f32) {
     }
 }
 
-/// Dessine la baleine ; renvoie la tête (pour les bulles).
 fn draw_sprite(buf: &mut Buffer, inner: Rect, sea: u16, phase: f32) -> (f32, f32) {
     let pose = pose(phase, inner);
     let sprite = rasterize(pose.pitch);
@@ -434,7 +379,6 @@ fn draw_sprite(buf: &mut Buffer, inner: Rect, sea: u16, phase: f32) -> (f32, f32
             if y < inner.y as f32 || y >= floor as f32 {
                 continue;
             }
-            // immergée : la silhouette prend la teinte de l'eau
             let under = ((y - sea as f32 + 1.0) / 4.0 + sink).clamp(0.0, 1.0);
             let base = match *kind {
                 M_BELLY => BELLY,
@@ -537,9 +481,9 @@ mod tests {
     fn shape_is_empty_far_away_and_filled_inside() {
         assert_eq!(whale_shape(0.5, -3.0), 0);
         assert_eq!(whale_shape(1.9, 0.5), 0);
-        assert_ne!(whale_shape(0.5, 0.5), 0); // corps
-        assert_ne!(whale_shape(0.05, 0.30), 0); // lobe de la caudale
-        assert_eq!(whale_shape(0.05, 0.44), 0); // échancrure de la caudale
+        assert_ne!(whale_shape(0.5, 0.5), 0);
+        assert_ne!(whale_shape(0.05, 0.30), 0);
+        assert_eq!(whale_shape(0.05, 0.44), 0);
     }
 
     #[test]
@@ -548,7 +492,6 @@ mod tests {
         assert_eq!(s.len(), SPRITE_ROWS as usize);
         assert_eq!(s[0].len(), SPRITE_COLS as usize);
         let filled = s.iter().flatten().filter(|(c, _)| *c != ' ').count();
-        // Assez de cellules pour lire une baleine, pas un point.
         assert!(filled > 25, "seulement {filled} cellules pleines");
         assert!(
             s.iter()
@@ -568,9 +511,7 @@ mod tests {
         assert!(apex.y < first.y, "l'apex doit être plus haut que le départ");
         assert!(apex.y < sea, "l'apex doit être hors de l'eau");
         assert!(end.y > sea, "la fin doit être sous la ligne d'eau");
-        // Le saut avance vers la droite.
         assert!(end.x > apex.x && apex.x >= first.x);
-        // L'inclinaison change de signe entre montée et plongée.
         assert!(pose(0.2, inner).pitch < 0.0);
         assert!(pose(0.8, inner).pitch > 0.0);
     }
@@ -593,8 +534,6 @@ mod tests {
         assert!(r.x >= 2 && r.y >= 1);
     }
 
-    /// Outil de vérification visuelle (ignoré en CI) : exporte chaque frame en
-    /// texte + une carte de palette, pour la comparer au prototype Python.
     #[test]
     #[ignore]
     fn dump_frames_for_preview() {
@@ -640,7 +579,6 @@ mod tests {
     #[test]
     fn drawing_puts_the_whale_and_the_sea_on_screen() {
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        // Départ antidaté : on force la phase « apex » pour un rendu déterministe.
         let w = Whale::from_start(Instant::now() - DURATION.mul_f32(0.55));
         term.draw(|f| draw(f, f.area(), &w)).unwrap();
         let buf = term.backend().buffer().clone();

@@ -3,7 +3,6 @@ use serde::Deserialize;
 
 use crate::providers::Provider;
 
-/// One model entry as returned by an OpenAI-compatible `/models` endpoint.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelEntry {
     pub id: String,
@@ -20,7 +19,6 @@ pub struct ModelEntry {
     pub architecture: Option<Architecture>,
 }
 
-/// Capability indices published by OpenRouter (Artificial Analysis).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Benchmarks {
     #[serde(default)]
@@ -62,14 +60,11 @@ struct ModelsResponse {
     data: Vec<ModelEntry>,
 }
 
-/// Query a provider's model list.
 pub async fn list(
     http: &reqwest::Client,
     provider: &Provider,
     key: Option<&str>,
 ) -> Result<Vec<ModelEntry>> {
-    // Mode local : le serveur n'expose que le modèle chargé. On liste les GGUF
-    // du dossier, sinon `/model` n'affiche rien ou un seul nom de chemin.
     if provider.id == "local" {
         let models = crate::local::scan_models();
         if !models.is_empty() {
@@ -87,17 +82,10 @@ pub async fn list(
         }
     }
 
-    // Google : en DIRECT (sans passerelle), la liste passe par l'API native
-    // (`?key=`, clé locale). Via la passerelle, l'endpoint OpenAI-compatible
-    // `/v1/models` renvoie la liste → on suit le chemin général ci-dessous.
     if provider.id == "google" && !crate::config::gateway_enabled() {
         return list_google(http, key).await;
     }
 
-    // Liste des modèles : passerelle si active (provider intégré), sinon direct.
-    // `endpoint_for` est la source unique de vérité (chat ET listing) : quand la
-    // passerelle tourne, l'URL pointe vers zer0-gw et la clé est None (injectée
-    // par la passerelle) — plus besoin de clé locale pour lister nvidia/openrouter.
     let (base_url, gw_key) = crate::config::endpoint_for(provider);
     let url = format!("{}/models", base_url.trim_end_matches('/'));
 
@@ -110,8 +98,6 @@ pub async fn list(
     if let Some(k) = gw_key.as_deref() {
         req = req.bearer_auth(k);
     }
-    // Distinguer trois cas, sinon un serveur éteint était annoncé « URL invalide » :
-    // 1) URL mal formée (builder) ; 2) injoignable (connect/timeout) ; 3) autre.
     let resp = req.send().await.map_err(|e| {
         if e.is_builder() {
             anyhow!(
@@ -144,7 +130,6 @@ pub async fn list(
     Ok(parsed.data)
 }
 
-/// A model is considered free if its id says so or both prices are zero.
 pub fn is_free(m: &ModelEntry) -> bool {
     if m.id.ends_with(":free") || m.id.ends_with("/free") {
         return true;
@@ -162,14 +147,8 @@ fn is_zero(v: &Option<String>) -> bool {
     )
 }
 
-/// Google Gemini model list.
-///
-/// Si la passerelle est active, on passe par elle (`{gw}/google/v1beta/models`)
-/// et elle injecte `?key=` — **aucune clé locale**. Sinon, endpoint natif direct
-/// avec la clé locale (env/config/coffre).
 async fn list_google(http: &reqwest::Client, key: Option<&str>) -> Result<Vec<ModelEntry>> {
     let url = if crate::config::gateway_enabled() {
-        // La clé Google est dans zer0-gw ; la passerelle ajoute `?key=`.
         format!(
             "{}/google/v1beta/models?pageSize=200",
             crate::gwclient::gw_base().trim_end_matches('/')
@@ -199,7 +178,6 @@ async fn list_google(http: &reqwest::Client, key: Option<&str>) -> Result<Vec<Mo
     parse_google(resp).await
 }
 
-/// Parse la réponse `models` native de Google en `ModelEntry`.
 async fn parse_google(resp: reqwest::Response) -> Result<Vec<ModelEntry>> {
     #[derive(Deserialize)]
     struct GResp {

@@ -1,9 +1,3 @@
-//! Zero-chan — assistante vocale intégrée à la TUI de l'agent.
-//!
-//! Choix de conception : **pas de boîte chat ni de barre dédiées**. Zero-chan
-//! réutilise la chat et l'input de l'agent. Il n'ajoute qu'un petit bloc d'état
-//! (à droite du banner) et deux boutons (à droite de la barre de saisie).
-
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
@@ -45,12 +39,6 @@ fn has(cmd: &str) -> bool {
     crate::platform::has(cmd)
 }
 
-/// Commande d'enregistrement WAV mono 16 kHz, selon l'écosystème audio dispo :
-/// PipeWire (`pw-record`) → PulseAudio (`parecord`) → ALSA (`arecord`) → SoX.
-///
-/// Windows : `sox_ng` est préféré à l'ancien `sox`. Le paquet WinGet
-/// `sox_ng.sox_ng` sait réellement ouvrir le périphérique d'enregistrement
-/// Windows, alors que SoX 14.4 peut répondre « no default audio device ».
 fn recorder(path: &Path) -> Option<(Command, &'static str)> {
     if has("pw-record") {
         let mut c = Command::new("pw-record");
@@ -80,14 +68,12 @@ fn recorder(path: &Path) -> Option<(Command, &'static str)> {
         return Some((sox_recorder("sox_ng", path), "sox_ng"));
     }
 
-    // macOS / Windows (et Linux sans PipeWire/PulseAudio) : SoX.
     if has("sox") {
         return Some((sox_recorder("sox", path), "sox"));
     }
     None
 }
 
-/// Commande SoX commune à `sox` et `sox_ng`.
 fn sox_recorder(exe: &str, path: &Path) -> Command {
     let mut c = Command::new(exe);
     c.args([
@@ -107,7 +93,6 @@ fn sox_recorder(exe: &str, path: &Path) -> Command {
     c
 }
 
-/// Message d'installation adapté à la plateforme.
 fn recorder_hint() -> &'static str {
     if cfg!(windows) {
         "installer SoX_ng (`winget install sox_ng.sox_ng`), puis redémarrer le terminal"
@@ -116,7 +101,6 @@ fn recorder_hint() -> &'static str {
     }
 }
 
-/// Lit une sortie d'erreur d'un enregistreur sans la laisser polluer le TUI.
 fn stderr_text(mut stderr: Option<ChildStderr>) -> String {
     let Some(mut stderr) = stderr.take() else {
         return String::new();
@@ -126,12 +110,6 @@ fn stderr_text(mut stderr: Option<ChildStderr>) -> String {
     s.trim().chars().take(400).collect()
 }
 
-/// Drains `stderr` **pendant** l'enregistrement, dans un thread.
-///
-/// Sans ça, le tube (64 Ko) peut se remplir si l'enregistreur écrit beaucoup :
-/// le processus se bloque, l'enregistrement s'arrête sans le dire. Le thread
-/// se termine à la fermeture du tube (processus tué), et `stop_rec` récupère le
-/// texte avec `join`.
 fn drain_stderr(stderr: Option<ChildStderr>) -> Option<std::thread::JoinHandle<String>> {
     stderr.map(|mut e| {
         std::thread::spawn(move || {
@@ -142,12 +120,6 @@ fn drain_stderr(stderr: Option<ChildStderr>) -> Option<std::thread::JoinHandle<S
     })
 }
 
-/// Répare les tailles RIFF/data d'un WAV interrompu brutalement.
-///
-/// Windows ne permet pas d'envoyer SIGINT comme Unix. L'arrêt du processus
-/// SoX termine donc le fichier avant sa finalisation : les tailles RIFF et data
-/// restent provisionales, alors que les échantillons PCM sont présents. On
-/// recalcule ces deux tailles à partir de la longueur réelle du fichier.
 fn repair_wav(path: &Path) -> std::io::Result<()> {
     use std::io::{Error, ErrorKind};
 
@@ -190,19 +162,14 @@ fn repair_wav(path: &Path) -> std::io::Result<()> {
         .ok_or_else(|| Error::new(ErrorKind::InvalidData, "chunk WAV « data » introuvable"))?;
     let payload = data_pos + 8;
     let available = bytes.len().saturating_sub(payload);
-    // Fichier déjà cohérent (SoX l'a finalisé sous Unix) : ne rien réécrire.
     if declared == available {
         return Ok(());
     }
-    // Taille manifestement provisoire ? Sinon ce sont des chunks annexes
-    // (`LIST`, `INFO`…) qui suivent `data` : la taille déclarée est fiable.
     let provisional = declared == 0 || declared > available || declared % 2 != 0;
     if !provisional {
         return Ok(());
     }
     let mut data_len = available;
-    // Un échantillon PCM 16 bits fait 2 octets : ignore un éventuel octet
-    // partial écrit juste avant l'arrêt du processus.
     data_len -= data_len % 2;
     let riff_len = bytes.len() - 8;
     if riff_len > u32::MAX as usize || data_len > u32::MAX as usize {
@@ -224,7 +191,6 @@ pub struct ZeroChan {
     rec_started: Option<std::time::Instant>,
 }
 
-/// Durée d'écoute maximale avant arrêt automatique (secondes).
 pub const MAX_REC_SECS: f32 = 6.0;
 
 impl Default for ZeroChan {
@@ -257,13 +223,11 @@ impl ZeroChan {
         }
     }
 
-    /// Démarre l'écoute micro. Retourne true si l'enregistrement a commencé.
     pub fn start_rec(&mut self) -> bool {
         if !self.on || self.rec.is_some() {
             return false;
         }
         let path = rec_path();
-        // Ne jamais réutiliser un ancien WAV si le nouvel enregistrement échoue.
         let _ = std::fs::remove_file(&path);
 
         let Some((mut cmd, label)) = recorder(&path) else {
@@ -283,9 +247,6 @@ impl ZeroChan {
             }
         };
 
-        // Certains enregistreurs échouent immédiatement (micro absent, privacy
-        // Windows, périphérique déjà utilisé). On laisse un court délai, puis on
-        // remonte leur erreur au lieu d'afficher un vague « indisponible ».
         std::thread::sleep(std::time::Duration::from_millis(120));
         if let Ok(Some(status)) = child.try_wait() {
             let detail = stderr_text(child.stderr.take());
@@ -305,13 +266,9 @@ impl ZeroChan {
         true
     }
 
-    /// Arrête l'enregistrement, attend la fermeture du processus et répare le
-    /// WAV si Windows a interrompu SoX avant sa finalisation.
     pub fn stop_rec(&mut self) {
         self.rec_started = None;
         if let Some(mut c) = self.rec.take() {
-            // SIGINT = finalise proprement le WAV (Unix). Windows : kill direct,
-            // puis `repair_wav` recalcule les tailles du RIFF.
             #[cfg(unix)]
             {
                 let pid = c.id();
@@ -361,7 +318,6 @@ impl ZeroChan {
         }
     }
 
-    /// Durée d'écoute écoulée (secondes), si enregistrement en cours.
     pub fn rec_elapsed(&self) -> Option<f32> {
         self.rec_started.map(|t| t.elapsed().as_secs_f32())
     }
@@ -374,7 +330,6 @@ impl ZeroChan {
         self.frame = self.frame.wrapping_add(1);
     }
 
-    /// Visage animé style kawaii : `◕` + bouche variable + clins d'œil.
     fn face(&self) -> String {
         let f = self.frame;
         let mouth = match self.state {
@@ -402,7 +357,6 @@ impl ZeroChan {
             }
             State::Off => "_",
         };
-        // clin d'œil / clignement occasionnel
         let left = if (f / 33).is_multiple_of(11) {
             "-"
         } else {
@@ -416,7 +370,6 @@ impl ZeroChan {
         format!("({left}{mouth}{right})")
     }
 
-    /// Couleur de l'état courant (bloc, ligne compacte, boutons).
     pub fn state_color(&self) -> ratatui::style::Color {
         match self.state {
             State::Off => theme::dim(),
@@ -427,12 +380,10 @@ impl ZeroChan {
         }
     }
 
-    /// `(-_-) en veille` : version d'une ligne, pour les terminaux étroits.
     pub fn compact_status(&self) -> String {
         format!("{} {}", self.face(), self.state.label())
     }
 
-    /// Petit bloc d'état (à droite du banner).
     pub fn draw(&self, f: &mut Frame, area: Rect) {
         let color = self.state_color();
         let block = Block::default()
@@ -445,7 +396,6 @@ impl ZeroChan {
             return;
         }
 
-        // visualiseur animé (petites barres)
         let bars = inner.width.saturating_sub(2) as usize / 2;
         let mut vis: Vec<Span> = Vec::new();
         for i in 0..bars {
@@ -480,7 +430,6 @@ impl ZeroChan {
     }
 }
 
-/// Transcrit un WAV via `faster_whisper` (Python, déjà installé).
 pub async fn transcribe(path: &PathBuf) -> anyhow::Result<String> {
     let code = "import sys\n\
         from faster_whisper import WhisperModel\n\
@@ -508,14 +457,11 @@ pub async fn transcribe(path: &PathBuf) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// État de Zero-chan sur une seule ligne, aligné à droite (terminaux étroits,
-/// mod ouvert) : pas d'encadré, mais l'information reste visible.
 pub fn draw_inline(f: &mut Frame, area: Rect, zc: &ZeroChan) {
     if area.width < 8 || area.height == 0 {
         return;
     }
     let text = zc.compact_status();
-    // Troncature sûre : on ne coupe jamais un caractère multi-octets.
     let mut text = text;
     crate::util::truncate_utf8(&mut text, area.width.saturating_sub(2) as usize);
     let line = Line::from(Span::styled(
@@ -527,13 +473,7 @@ pub fn draw_inline(f: &mut Frame, area: Rect, zc: &ZeroChan) {
     f.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
 }
 
-/// Deux boutons à droite de la barre de saisie : 0chan et micro.
-/// Retourne leurs rectangles (pour la détection de clic).
 pub fn draw_buttons(f: &mut Frame, area: Rect, zc: &ZeroChan) -> (Option<Rect>, Option<Rect>) {
-    // Petit encadré compact :
-    //   ┌ 0chan/mic ┐
-    //   │ off / off │
-    //   └───────────┘
     if area.width < 13 || area.height < 3 {
         return (None, None);
     }
@@ -596,7 +536,6 @@ pub fn draw_buttons(f: &mut Frame, area: Rect, zc: &ZeroChan) -> (Option<Rect>, 
     };
     f.render_widget(Paragraph::new(vec![top, mid, bottom]), block_area);
 
-    // Régions cliquables : « off » (0chan) à gauche, « off » (mic) à droite.
     let r1 = Rect {
         x: area.x + 2,
         y: area.y + 1,
@@ -612,28 +551,15 @@ pub fn draw_buttons(f: &mut Frame, area: Rect, zc: &ZeroChan) -> (Option<Rect>, 
     (Some(r1), Some(r2))
 }
 
-/// Zone du bloc d'état à droite du banner (largeur fixe).
-/// Où loger l'état de Zero-chan selon la largeur disponible.
-///
-/// Le banner fait ~59 colonnes (art) et le bloc encadré 26 : sous ~92 colonnes,
-/// les deux ne tiennent plus côte à côte — c'est le cas dès qu'un mod est ouvert,
-/// puisque le chat ne garde alors que 56 % de la largeur. Auparavant le bloc
-/// disparaissait purement et simplement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
-    /// Bloc encadré à droite du banner.
     Boxed(Rect),
-    /// Une ligne discrète alignée à droite, sur la ligne de la tagline.
     Inline(Rect),
-    /// Rien : pas la place.
     None,
 }
 
-/// Hauteur du banner (5 lignes d'art + la tagline).
 pub const BANNER_ROWS: u16 = 6;
-/// Largeur du bloc encadré.
 pub const BOX_WIDTH: u16 = 26;
-/// Sous cette largeur, plus rien : même la ligne compacte serait tronquée.
 pub const MIN_INLINE_WIDTH: u16 = 34;
 
 pub fn block_layout(banner_area: Rect, on: bool) -> (Rect, Placement) {
@@ -647,8 +573,6 @@ pub fn block_layout(banner_area: Rect, on: bool) -> (Rect, Placement) {
             .split(banner_area);
         return (cols[0], Placement::Boxed(cols[1]));
     }
-    // Étroitis : on garde le banner entier et on écrit l'état sur sa dernière
-    // ligne (la tagline), aligné à droite. Visible, sans encadré.
     let row = Rect {
         x: banner_area.x,
         y: banner_area.y + banner_area.height.saturating_sub(1),
@@ -689,8 +613,6 @@ mod layout_tests {
 
     #[test]
     fn narrow_banner_keeps_an_inline_status() {
-        // 66 colonnes : c'est la colonne du chat quand un mod est ouvert sur un
-        // terminal de 120 (56 %). Avant, Zero-chan disparaissait entièrement.
         let (banner, placement) = block_layout(rect(66), true);
         match placement {
             Placement::Inline(r) => {
@@ -710,7 +632,6 @@ mod layout_tests {
     #[test]
     fn tiny_banner_has_no_zero_chan() {
         assert!(matches!(block_layout(rect(30), true).1, Placement::None));
-        // Et désactivée : rien, même en large.
         assert!(matches!(block_layout(rect(200), false).1, Placement::None));
     }
 
@@ -747,17 +668,16 @@ mod tests {
         wav[8..12].copy_from_slice(b"WAVE");
         wav[12..16].copy_from_slice(b"fmt ");
         wav[16..20].copy_from_slice(&16u32.to_le_bytes());
-        wav[20..22].copy_from_slice(&1u16.to_le_bytes()); // PCM
-        wav[22..24].copy_from_slice(&1u16.to_le_bytes()); // mono
+        wav[20..22].copy_from_slice(&1u16.to_le_bytes());
+        wav[22..24].copy_from_slice(&1u16.to_le_bytes());
         wav[24..28].copy_from_slice(&16_000u32.to_le_bytes());
         wav[28..32].copy_from_slice(&32_000u32.to_le_bytes());
         wav[32..34].copy_from_slice(&2u16.to_le_bytes());
         wav[34..36].copy_from_slice(&16u16.to_le_bytes());
         wav[36..40].copy_from_slice(b"data");
-        // SoX interrompu brutalement : tailles encore provisoires.
         wav[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
         wav[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
-        wav.extend_from_slice(&[0u8; 100]); // 50 échantillons PCM 16 bits
+        wav.extend_from_slice(&[0u8; 100]);
         std::fs::write(&path, &wav).unwrap();
 
         repair_wav(&path).unwrap();
@@ -785,7 +705,6 @@ mod tests {
         wav[16..20].copy_from_slice(&16u32.to_le_bytes());
         wav[36..40].copy_from_slice(b"data");
         wav.extend_from_slice(&[1u8; 100]);
-        // tailles exactes, comme les écrit SoX à la finalisation
         let riff_size = (wav.len() - 8) as u32;
         let data_size = (wav.len() - 44) as u32;
         wav[4..8].copy_from_slice(&riff_size.to_le_bytes());

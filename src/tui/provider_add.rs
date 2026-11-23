@@ -1,17 +1,3 @@
-//! Overlay `/provider add` — ajout d'un provider sans taper la ligne de commande.
-//!
-//! Deux chemins :
-//!  • **préconfiguré** : on choisit dans le catalogue, il ne reste que la clé ;
-//!  • **custom** : nom, base URL, puis clé.
-//!
-//! Dans les deux cas, une confirmation explicite précède le dépôt. La clé part
-//! **uniquement** vers zer0-gw (`GwRoute::Gw`) : si la passerelle est
-//! injoignable ou si l'utilisateur refuse, rien n'est écrit — jamais de repli
-//! silencieux vers un stockage local.
-//!
-//! La clé n'est jamais journalisée ni ajoutée à l'historique d'entrée : la
-//! commande est interceptée avant `send_message`.
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
@@ -28,17 +14,11 @@ use super::App;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
-    /// Choix dans le catalogue, ou « Custom ».
     Choose,
-    /// Clé API d'un provider préconfiguré.
     Key,
-    /// Nom d'affichage d'un provider custom.
     CustomName,
-    /// Base URL d'un provider custom.
     CustomUrl,
-    /// Clé API d'un provider custom.
     CustomKey,
-    /// Consentement : déposer la clé dans zer0-gw ?
     Confirm,
 }
 
@@ -65,15 +45,12 @@ impl Step {
 pub struct ProviderAdd {
     pub step: Step,
     pub cursor: usize,
-    /// Entrées du catalogue (hors `local`), plus « Custom » en dernier.
     pub choices: Vec<Choice>,
-    /// Provider préconfiguré retenu.
     pub picked: Option<providers::Provider>,
     pub name: String,
     pub base_url: String,
     pub key: String,
     pub error: Option<String>,
-    /// Consentement : `None` = pas encore répondu.
     pub consent: Option<bool>,
 }
 
@@ -81,7 +58,6 @@ pub struct ProviderAdd {
 pub struct Choice {
     pub label: String,
     pub note: String,
-    /// `None` = entrée « Custom ».
     pub provider: Option<providers::Provider>,
 }
 
@@ -89,7 +65,6 @@ impl ProviderAdd {
     fn new() -> Self {
         let mut choices: Vec<Choice> = providers::all()
             .into_iter()
-            // `local` n'a pas de clé : il n'a rien à faire ici.
             .filter(|p| p.id != "local" && p.id != "local-embed")
             .map(|p| Choice {
                 label: format!("{} — {}", p.id, p.name),
@@ -121,7 +96,6 @@ impl ProviderAdd {
         }
     }
 
-    /// Identifiant technique dérivé du nom pour un provider custom.
     fn custom_id(&self) -> String {
         let mut id: String = self
             .name
@@ -137,7 +111,6 @@ impl ProviderAdd {
     }
 }
 
-/// Ouvre l'overlay.
 pub fn start(app: &mut App) {
     app.provider_add = Some(ProviderAdd::new());
     app.input.clear();
@@ -158,7 +131,6 @@ fn set_error(app: &mut App, msg: impl Into<String>) {
     }
 }
 
-/// Gère une touche quand l'overlay est ouvert.
 pub fn handle_key(key: KeyEvent, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     let Some(step) = app.provider_add.as_ref().map(|o| o.step) else {
         return;
@@ -303,13 +275,11 @@ fn activate(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
             app.secret_mode = false;
         }
         Step::Confirm => {
-            // Entrée = consentir au dépôt dans la passerelle.
             submit(app, ui_tx);
         }
     }
 }
 
-/// Dépose le provider **via la passerelle uniquement**.
 fn submit(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     let Some(o) = app.provider_add.as_ref() else {
         return;
@@ -348,7 +318,6 @@ fn submit(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
         base_url: Some(&base_url),
         name: name.as_deref(),
         key: Some(&key),
-        // Jamais de repli local : la clé doit rester dans la passerelle.
         route: crate::commands::GwRoute::Gw,
         force: false,
     });
@@ -365,10 +334,6 @@ fn submit(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
         Err(e) => set_error(app, e.to_string()),
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Rendu
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let Some(o) = app.provider_add.as_ref() else {

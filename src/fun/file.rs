@@ -1,10 +1,3 @@
-//! Mod « 0file » : explorateur de dossiers rétro (lecture + navigation +
-//! copie du chemin). Aucune écriture, aucune exécution.
-//!
-//! Style : phosphore vert / ambre, bordure double, comme un terminal des
-//! années 80. Les dossiers sont `▸`, les fichiers `·`, la sélection est un
-//! bloc inversé.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -19,7 +12,6 @@ const AMBER: Color = Color::Rgb(255, 176, 0);
 const DIM: Color = Color::Rgb(86, 140, 110);
 const DARK: Color = Color::Rgb(6, 18, 10);
 
-/// Une ligne de la liste (`..` inclus).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub name: String,
@@ -40,7 +32,6 @@ pub struct FileExplorer {
 }
 
 impl FileExplorer {
-    /// Ouvre un dossier, ou le dossier parent d'un fichier (et le sélectionne).
     pub fn open(arg: &str) -> Self {
         let arg = expand_tilde(arg.trim());
         let path = if arg.is_empty() {
@@ -141,7 +132,6 @@ impl FileExplorer {
         self.clamp_scroll();
     }
 
-    /// Avance/recule d'une page (hauteur visible).
     pub fn page(&mut self, forward: bool) {
         let step = self.rows.max(1);
         if forward {
@@ -162,7 +152,6 @@ impl FileExplorer {
         self.clamp_scroll();
     }
 
-    /// Entrée : descendre dans un dossier, copier le chemin d'un fichier.
     pub fn enter(&mut self) {
         let Some(e) = self.selected().cloned() else {
             return;
@@ -205,7 +194,6 @@ impl FileExplorer {
         self.flash("liste relue", true);
     }
 
-    /// Copie le chemin absolu de l'élément sélectionné.
     pub fn copy_path(&mut self) {
         let Some(e) = self.selected().cloned() else {
             return;
@@ -226,14 +214,6 @@ impl FileExplorer {
         self.status = Some((msg.into(), Instant::now(), ok));
     }
 
-    /// Une entrée = **une seule rangée**, quelle que soit la largeur.
-    ///
-    /// Bug corrigé : la ligne était composée puis rendue avec `Wrap`, si bien
-    /// qu'un nom long la faisait passer sur deux rangées. La fenêtre glissante
-    /// (`take(self.rows)`) affichait alors moins d'entrées que prévu et les
-    /// derniers dossiers restaient cachés alors que la sélection descendait.
-    /// On calcule désormais la largeur disponible **avant** de composer, et on
-    /// n'enveloppe plus rien.
     fn build_line(e: &Entry, selected: bool, width: usize) -> Line<'static> {
         let (mark, color) = if e.up {
             ("↰", DIM)
@@ -247,7 +227,6 @@ impl FileExplorer {
         } else {
             crate::monitor::bytes(e.size)
         };
-        // 2 (curseur) + 2 (marque) + 1 (espace) + taille + 1 (espace final)
         let fixed = 2 + 2 + 1 + unicode_width::UnicodeWidthStr::width(size.as_str()) + 1;
         let name_w = width.saturating_sub(fixed);
         let mut name = e.name.clone();
@@ -308,7 +287,6 @@ impl FileExplorer {
         self.rows = rows[1].height as usize;
         self.clamp_scroll();
 
-        // Chemin courant, raccourci avec `~`.
         let shown = shorten_home(&self.cwd);
         f.render_widget(
             Paragraph::new(Line::from(vec![
@@ -318,10 +296,6 @@ impl FileExplorer {
             rows[0],
         );
 
-        // Liste : fenêtre glissante sur `self.scroll`. Une entrée = une rangée
-        // (garanti par `build_line`), donc `take(self.rows)` montre exactement
-        // `rows` entrées — avant, un nom long passait sur deux rangées et les
-        // derniers dossiers restaient cachés.
         let mut lines: Vec<Line> = Vec::new();
         for (i, e) in self
             .entries
@@ -337,7 +311,6 @@ impl FileExplorer {
             rows[1],
         );
 
-        // Pied : statut éphémère, sinon rappel des touches.
         let status = self
             .status
             .as_ref()
@@ -359,7 +332,6 @@ impl FileExplorer {
     }
 }
 
-/// `~` pour le dossier personnel, sinon chemin tel quel.
 pub fn shorten_home(p: &Path) -> String {
     let home = crate::platform::home();
     let s = p.to_string_lossy();
@@ -381,7 +353,6 @@ fn expand_tilde(arg: &str) -> String {
     arg.to_string()
 }
 
-/// Tronque à `width` colonnes, avec `…`.
 fn truncate_width(s: &str, width: usize) -> String {
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
     if width == 0 {
@@ -499,10 +470,6 @@ mod width_tests {
 
     #[test]
     fn a_line_never_exceeds_the_available_width() {
-        // C'est la garantie qui empêche la sélection de sortir de la fenêtre :
-        // si une ligne passait sur deux rangées, `take(rows)` montrerait moins
-        // d'entrées que la hauteur disponible, et les derniers dossiers
-        // resteraient invisibles.
         for width in [20usize, 30, 40, 60, 100] {
             for (name, is_dir) in [
                 ("a", true),
@@ -538,8 +505,6 @@ mod width_tests {
 
     #[test]
     fn a_visible_window_shows_one_entry_per_row() {
-        // 30 dossiers pour 5 rangées : en descendant jusqu'au dernier, il doit
-        // être dans la fenêtre (`scroll..scroll+rows`).
         let mut fe = FileExplorer {
             cwd: PathBuf::from("."),
             entries: (0..30).map(|_| entry("d", true)).collect(),

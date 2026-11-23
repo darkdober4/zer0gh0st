@@ -1,10 +1,3 @@
-//! Tests du mod `zer0do` (appareils du réseau) — sans réseau, sans appareil.
-//!
-//! On vérifie le **contrat de sûreté** : aide lisible, commandes inconnues
-//! refusées, et surtout **aucune action sans allowlist**. Le scan lui-même
-//! dépend du réseau local : il n'est pas testé ici (et ne doit pas l'être —
-//! un test qui sonde le LAN d'un runner CI serait absurde).
-
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -12,7 +5,6 @@ fn script() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mods/zer0do/zer0do")
 }
 
-/// `bash` est requis par le script ; sous Windows sans Git Bash, on saute.
 fn bash_available() -> bool {
     Command::new("bash")
         .arg("-c")
@@ -38,9 +30,6 @@ fn run_env(args: &[&str], cwd: &std::path::Path, envs: &[(&str, &str)]) -> (bool
     (out.status.success(), text)
 }
 
-/// Faux Roku : sert une réponse `<device-info>` sur un port libre de la boucle
-/// locale. Permet de tester l'analyse XML et le choix de la MAC **sans réseau**
-/// et sans toucher à un vrai téléviseur.
 fn fake_roku(network_type: &str) -> u16 {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -59,8 +48,6 @@ fn fake_roku(network_type: &str) -> u16 {
     );
     let active_app =
         "<active-app><app id=\"837\" type=\"appl\" version=\"1.0\">YouTube</app></active-app>";
-    // Plusieurs requêtes servies (`status` interroge device-info **et**
-    // active-app) ; routage sur le chemin demandé.
     std::thread::spawn(move || {
         for _ in 0..6 {
             let Ok((mut sock, _)) = listener.accept() else {
@@ -85,8 +72,6 @@ fn fake_roku(network_type: &str) -> u16 {
     port
 }
 
-/// Le script doit au minimum être **syntaxiquement valide** : une apostrophe
-/// dans une chaîne simple l'a déjà cassé deux fois.
 #[test]
 fn the_script_parses() {
     if !bash_available() {
@@ -122,7 +107,6 @@ fn help_lists_the_commands_and_the_limits() {
     for cmd in ["scan", "status", "key", "power"] {
         assert!(text.contains(cmd), "« {cmd} » absent de l'aide : {text}");
     }
-    // L'aide doit dire ce que le mod NE fait pas.
     assert!(
         text.contains("Roku") && text.to_lowercase().contains("limite"),
         "l'aide doit annoncer ses limites : {text}"
@@ -152,7 +136,6 @@ fn actions_are_refused_without_an_allowlist() {
         return;
     }
     let d = tempdir("noallow");
-    // Aucun `.zer0/zer0do.allow` : l'action doit être refusée AVANT tout réseau.
     let (ok, text) = run(&["key", "192.0.2.10", "Home"], &d);
     assert!(!ok, "l'action aurait dû être refusée : {text}");
     assert!(text.contains("action refusée"), "{text}");
@@ -160,7 +143,6 @@ fn actions_are_refused_without_an_allowlist() {
         text.contains("zer0do.allow"),
         "le chemin de l'allowlist doit être donné : {text}"
     );
-    // Et avec `power off` aussi (aucun appareil ne doit être contacté).
     let (ok2, text2) = run(&["power", "192.0.2.10", "off"], &d);
     assert!(!ok2, "{text2}");
     assert!(text2.contains("action refusée"), "{text2}");
@@ -174,9 +156,6 @@ fn an_allowed_address_passes_the_allowlist_check() {
     }
     let d = tempdir("allow");
     std::fs::create_dir_all(d.join(".zer0")).unwrap();
-    // 192.0.2.0/24 est le bloc de test RFC 5737 : rien ne répondra, mais la
-    // vérification d'allowlist doit passer et l'échec venir du réseau (HTTP
-    // vide), pas d'un refus de permission.
     std::fs::write(d.join(".zer0/zer0do.allow"), "# test\n192.0.2.10\n").unwrap();
     let (ok, text) = run(&["key", "192.0.2.10", "Home"], &d);
     assert!(!ok, "aucun appareil ne doit répondre : {text}");
@@ -223,10 +202,8 @@ fn wake_dry_run_builds_the_magic_packet_without_network() {
     let (ok, text) = run(&["wake", "192.0.2.10", "--dry-run"], &d);
     assert!(ok, "{text}");
     assert!(text.contains("A4:2B:8C:11:22:33"), "{text}");
-    // 6 octets de 0xFF + 16 × 6 octets de MAC = 102.
     assert!(text.contains("102 octets"), "taille du paquet : {text}");
     assert!(text.contains("255.255.255.255"), "{text}");
-    // Et via `power on`, qui doit router vers Wake-on-LAN.
     let (ok2, text2) = run(&["power", "192.0.2.10", "on", "--dry-run"], &d);
     assert!(ok2, "{text2}");
     assert!(text2.contains("Wake-on-LAN"), "{text2}");
@@ -270,8 +247,6 @@ fn digits_in_key_names_are_accepted() {
     let d = tempdir("key-digits");
     std::fs::create_dir_all(d.join(".zer0")).unwrap();
     std::fs::write(d.join(".zer0/zer0do.allow"), "192.0.2.10\n").unwrap();
-    // `InputHDMI2` est une touche légitime : elle ne doit pas être refusée par
-    // la validation (l'échec doit venir du réseau, pas du format).
     let (ok, text) = run(&["key", "192.0.2.10", "InputHDMI2"], &d);
     assert!(!ok, "aucun appareil ne doit répondre : {text}");
     assert!(!text.contains("touche invalide"), "{text}");
@@ -293,7 +268,6 @@ fn literal_key_typing_is_refused_with_an_alternative() {
         text.contains("search"),
         "il faut proposer l'alternative : {text}"
     );
-    // Régression : un message avec des backticks faisait exécuter du shell.
     assert!(
         !text.contains("command substitution") && !text.contains("syntax error"),
         "le message d'erreur s'exécute au lieu de s'afficher : {text}"
@@ -348,8 +322,6 @@ fn power_on_does_not_toggle_a_device_that_is_already_on() {
     if !bash_available() {
         return;
     }
-    // Le faux Roku répond `PowerOn` : `power on` ne doit envoyer **aucune**
-    // touche (la touche Power est une bascule — l'envoyer éteindrait la TV).
     let port = fake_roku("ethernet");
     let d = tempdir("power-on-idempotent");
     std::fs::create_dir_all(d.join(".zer0")).unwrap();
@@ -373,8 +345,6 @@ fn wake_warns_when_the_allowlist_mac_is_the_wrong_interface() {
     if !bash_available() {
         return;
     }
-    // Allowlist = MAC Wi-Fi, appareil en Ethernet : le mod doit le dire et
-    // utiliser la MAC du réseau (sinon le réveil ne peut pas marcher).
     let port = fake_roku("ethernet");
     let d = tempdir("mac-mismatch");
     std::fs::create_dir_all(d.join(".zer0")).unwrap();
@@ -428,7 +398,6 @@ fn invalid_key_names_are_refused() {
     let d = tempdir("badkey");
     std::fs::create_dir_all(d.join(".zer0")).unwrap();
     std::fs::write(d.join(".zer0/zer0do.allow"), "192.0.2.10\n").unwrap();
-    // Une touche contenant autre chose que des lettres ne doit jamais partir.
     let (ok, text) = run(&["key", "192.0.2.10", "Home;rm -rf /"], &d);
     assert!(!ok, "{text}");
     assert!(text.contains("touche invalide"), "{text}");

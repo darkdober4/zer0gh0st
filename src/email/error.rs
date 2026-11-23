@@ -1,6 +1,3 @@
-//! Erreurs typées du module email.
-//! Aucun secret n'est inclus dans les variantes d'erreur.
-
 use thiserror::Error;
 
 #[derive(Error, Debug)]

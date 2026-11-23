@@ -1,8 +1,3 @@
-//! Tests d'intégration de `/zer0push`.
-//!
-//! Aucun réseau, aucun `gh` : on vérifie le parseur, les garde-fous et le
-//! dry-run sur un dépôt git temporaire. Le vrai push est laissé à l'utilisateur.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,7 +17,6 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-/// Dépôt jetable : Cargo.toml + .git + un commit, sur une branche de feature.
 fn temp_repo(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("zer0push-it-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -98,7 +92,6 @@ fn dry_run_plans_without_touching_the_remote() {
     assert!(text.contains("dry-run"), "sortie : {text}");
     assert!(text.contains("cargo test"), "sortie : {text}");
     assert!(text.contains("gh pr create"), "sortie : {text}");
-    // Rien n'a été poussé : aucun remote n'existe dans ce dépôt.
     let remotes = Command::new("git")
         .args(["remote"])
         .current_dir(&dir)
@@ -110,8 +103,6 @@ fn dry_run_plans_without_touching_the_remote() {
 
 #[test]
 fn commit_mode_includes_new_untracked_files() {
-    // Régression : `git add -u` seul laissait les nouveaux fichiers hors du
-    // commit → la CI compilait un module absent (E0583).
     let dir = temp_repo("commit");
     std::fs::write(dir.join("nouveau.rs"), "// neuf\n").unwrap();
     let opts = PushOptions {
@@ -119,7 +110,6 @@ fn commit_mode_includes_new_untracked_files() {
         no_tests: true,
         ..Default::default()
     };
-    // Le push échouera (aucun remote) : on ne teste que l'étape commit.
     let _ = run_in(&dir, &opts);
     let tracked = Command::new("git")
         .args(["ls-files"])

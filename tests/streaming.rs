@@ -1,13 +1,3 @@
-//! Tests de la couche réseau/agent contre un **faux serveur local**.
-//!
-//! C'était le trou principal : `llm/llama.rs` (parseur SSE, assemblage des
-//! `tool_calls`) et `agent/turn.rs` (bascule, containment) n'avaient aucun test.
-//! Or c'est là que vivent les régressions invisibles : flux tronqué accepté,
-//! arguments d'outil coupés en deux, backoff qui ne bascule jamais.
-//!
-//! Aucune dépendance ajoutée : le serveur est un `TcpListener` tokio qui répond
-//! du HTTP/1.1 brut.
-
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -22,17 +12,12 @@ use zer0::event::UiEvent;
 use zer0::llm::llama::{ApiClient, ChatOptions};
 use zer0::route::Endpoint;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Faux serveur : une réponse brute par connexion, dans l'ordre.
-// ─────────────────────────────────────────────────────────────────────────────
-
 struct Mock {
     base: String,
     requests: Arc<Mutex<Vec<String>>>,
 }
 
 impl Mock {
-    /// Sert `responses` dans l'ordre (une par connexion acceptée).
     async fn start(responses: Vec<String>) -> Mock {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
@@ -62,7 +47,6 @@ impl Mock {
     }
 }
 
-/// Lit en-têtes + corps (Content-Length) d'une requête HTTP.
 async fn read_request(sock: &mut TcpStream) -> Option<String> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -102,7 +86,6 @@ fn sse(events: &[&str]) -> String {
     s
 }
 
-/// Réponse JSON complète (`stream: false`), pas du SSE.
 fn json_body(body: &str) -> String {
     format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{body}")
 }
@@ -111,8 +94,6 @@ fn status(code: &str, extra_headers: &str) -> String {
     format!("HTTP/1.1 {code}\r\n{extra_headers}content-length: 0\r\nconnection: close\r\n\r\n")
 }
 
-/// Vérifie l'arrêt pendant l'attente réseau et pendant une commande shell.
-/// À exécuter en série : le signal d'annulation existant est global.
 #[tokio::test]
 #[ignore = "signal d'annulation global : lancer séparément avec --ignored --test-threads=1"]
 async fn cancellation_interrupts_network_and_shell_without_restarting() {
@@ -205,10 +186,6 @@ async fn cancellation_interrupts_network_and_shell_without_restarting() {
     zer0::cancel::clear();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Client
-// ─────────────────────────────────────────────────────────────────────────────
-
 async fn chat(base: &str) -> (String, Vec<zer0::agent::history::ToolCall>, Option<String>) {
     let client = ApiClient::new(base, "test-model", None);
     let (tx, _rx) = unbounded_channel::<UiEvent>();
@@ -240,8 +217,6 @@ async fn streams_content_and_finish_reason() {
     assert_eq!(finish.as_deref(), Some("stop"));
 }
 
-/// Le cas qui casse en vrai : un `tool_call` dont le nom et les arguments
-/// arrivent en plusieurs morceaux. Le parseur doit recoller sans perdre d'octet.
 #[tokio::test]
 async fn assembles_a_fragmented_tool_call() {
     let mock = Mock::start(vec![sse(&[
@@ -260,8 +235,6 @@ async fn assembles_a_fragmented_tool_call() {
     assert_eq!(finish.as_deref(), Some("tool_calls"));
 }
 
-/// Un flux qui se ferme sans `[DONE]` ni `finish_reason` ne doit **pas** passer
-/// pour une réponse complète : on le signale (`finish_reason = "eof"`).
 #[tokio::test]
 async fn unterminated_stream_is_flagged_not_silent() {
     let mock = Mock::start(vec![sse(&[
@@ -278,7 +251,6 @@ async fn unterminated_stream_is_flagged_not_silent() {
     );
 }
 
-/// 429 puis succès : le client honore `Retry-After` et réessaie une fois.
 #[tokio::test]
 async fn retries_once_on_429_then_succeeds() {
     let mock = Mock::start(vec![
@@ -301,7 +273,6 @@ async fn retries_once_on_429_then_succeeds() {
     );
 }
 
-/// Une erreur de setup (500) n'est pas avalée : elle remonte avec son statut.
 #[tokio::test]
 async fn setup_error_carries_the_status() {
     let mock = Mock::start(vec![status("500 Internal Server Error", "")]).await;
@@ -325,8 +296,6 @@ async fn setup_error_carries_the_status() {
     }
 }
 
-/// La bascule d'endpoint : le premier répond 500, le second répond. C'est la
-/// logique de `run_turn` qui n'était couverte par aucun test.
 #[tokio::test]
 async fn run_turn_fails_over_to_the_next_endpoint() {
     let bad = Mock::start(vec![status("503 Service Unavailable", "")]).await;
@@ -337,7 +306,6 @@ async fn run_turn_fails_over_to_the_next_endpoint() {
     ])])
     .await;
 
-    // Libellés uniques : `route::mark_failed` est un état global partagé.
     let suffix = std::process::id();
     let endpoints = vec![
         Endpoint {
@@ -395,11 +363,6 @@ async fn run_turn_fails_over_to_the_next_endpoint() {
     assert_eq!(good.requests().len(), 1, "le second doit prendre le relais");
 }
 
-/// Les outils déclarés partent bien dans le corps de la requête (sinon le
-/// modèle n'a aucun moyen de les appeler).
-/// Mode prompt : le modèle écrit `<tool_call>…</tool_call>` dans le contenu.
-/// On doit extraire l'appel, retirer le bloc du texte, et **ne pas** envoyer
-/// le paramètre `tools` (c'est tout l'intérêt pour un serveur local bridé).
 #[tokio::test]
 async fn prompt_mode_parses_text_tool_calls() {
     let mock = Mock::start(vec![sse(&[
@@ -437,8 +400,6 @@ async fn prompt_mode_parses_text_tool_calls() {
     assert!(!body.contains("\"tools\":"), "tools envoyés en mode prompt");
 }
 
-/// Non-streaming : une seule réponse JSON, le contenu et les tool calls sont
-/// extraits, et la requête doit bien demander `"stream": false`.
 #[tokio::test]
 async fn non_stream_mode_parses_full_response() {
     let mock = Mock::start(vec![json_body(
@@ -459,7 +420,6 @@ async fn non_stream_mode_parses_full_response() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].function.name, "code_exec");
     assert_eq!(finish.as_deref(), Some("tool_calls"));
-    // les tokens ont bien été poussés vers l'UI
     let mut seen = String::new();
     while let Ok(ev) = rx.try_recv() {
         if let UiEvent::Token(t) = ev {
@@ -501,10 +461,6 @@ async fn tool_specs_are_sent_to_the_provider() {
     assert!(body.contains(r#""name":"code_exec""#), "{body}");
 }
 
-/// Régression : quand le budget d'outils est épuisé, le tour doit produire une
-/// **réponse finale en texte** (sans outils) et toujours envoyer `TurnComplete`.
-/// Avant, la boucle s'arrêtait sur un outil : l'utilisateur devait taper F7
-/// (nudge) à répétition pour obtenir une synthèse.
 #[tokio::test]
 async fn tool_budget_forces_a_final_text_answer() {
     use zer0::agent::turn::run_turn_budgeted;
@@ -547,7 +503,7 @@ async fn tool_budget_forces_a_final_text_answer() {
             vec![],
             ChatOptions::default(),
             tx,
-            1, // une seule itération d'outils…
+            1,
             5,
         )
         .await;

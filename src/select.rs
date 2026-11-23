@@ -1,6 +1,5 @@
 use crate::models::ModelEntry;
 
-/// Rough task categories used to rank models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     Code,
@@ -26,11 +25,6 @@ impl Category {
     }
 }
 
-/// Whole-word (boundary) match, so `api` does not match inside `rapide`.
-///
-/// `start` must advance by one **char**, never one byte: `hay` is UTF-8 and
-/// French text contains multibyte chars (`é`, `à`…). Slicing at a non-boundary
-/// byte index panics ("byte index is not a char boundary").
 fn contains_word(hay: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
@@ -39,8 +33,6 @@ fn contains_word(hay: &str, needle: &str) -> bool {
     while let Some(pos) = hay[start..].find(needle) {
         let i = start + pos;
         let end = i + needle.len();
-        // `i` and `end` are char boundaries (find/len of a match), so slicing is safe.
-        // Accented letters count as word chars: `derivee` must not match in `prederivee`.
         let before_ok = hay[..i]
             .chars()
             .next_back()
@@ -52,17 +44,13 @@ fn contains_word(hay: &str, needle: &str) -> bool {
         if before_ok && after_ok {
             return true;
         }
-        // advance one CHARACTER, not one byte (B1: byte advance panicked on `é`)
         let step = hay[i..].chars().next().map_or(1, |c| c.len_utf8());
         start = i + step;
     }
     false
 }
 
-/// Keyword-based task classifier (French + English).
 pub fn classify(problem: &str) -> Category {
-    // `to_lowercase`, NOT `to_ascii_lowercase`: the latter strips accents and
-    // makes every accented keyword (`équation`, `dérivée`, `écris`...) dead.
     let p = problem.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| contains_word(&p, w));
 
@@ -158,7 +146,6 @@ pub fn classify(problem: &str) -> Category {
     Category::General
 }
 
-/// Published capability indices (0 when absent).
 fn bench(m: &ModelEntry) -> (f64, f64, f64) {
     match m
         .benchmarks
@@ -182,7 +169,6 @@ fn has_image_input(m: &ModelEntry) -> bool {
         .unwrap_or(false)
 }
 
-/// Heuristique de secours (nom du modèle) quand le catalogue n'est pas disponible.
 pub fn supports_images_by_name(model_id: &str) -> bool {
     let id = model_id.to_ascii_lowercase();
     [
@@ -198,7 +184,6 @@ pub fn supports_images_by_name(model_id: &str) -> bool {
     .any(|k| id.contains(k))
 }
 
-/// Preference keywords per category (tie-break only; benchmarks dominate).
 fn keyword_bonus(id: &str, cat: Category) -> i64 {
     let prefs: &[&str] = match cat {
         Category::Code => &[
@@ -237,14 +222,6 @@ fn keyword_bonus(id: &str, cat: Category) -> i64 {
     s
 }
 
-/// Score one model for a category. Higher is better.
-///
-/// When OpenRouter publishes Artificial Analysis indices, they dominate the
-/// score; keyword preferences are only a fallback / tie-break.
-/// `true` si le modèle n'est pas utilisable en chat (embedding ou reranker).
-/// Ces modèles ne répondent que sur `/embeddings` ; les envoyer à
-/// `/chat/completions` produit un **400** (constaté avec
-/// `liquid/lfm-2.5-embedding-350m:free`).
 pub fn is_embedding_or_rerank(id: &str) -> bool {
     id.contains("embedding") || id.contains("rerank")
 }
@@ -254,19 +231,16 @@ pub fn score(m: &ModelEntry, cat: Category) -> i64 {
     let (intel, code, agentic) = bench(m);
 
     let mut s = match cat {
-        // No latency data available: use naming heuristics, not intelligence.
         Category::Fast => fast_score(&id),
         Category::Code => (code.max(agentic) * 4.0) as i64,
         _ => (intel * 4.0) as i64,
     };
     s += keyword_bonus(&id, cat);
 
-    // modality constraints
     if cat == Category::Vision && !has_image_input(m) {
         s -= 300;
     }
 
-    // never useful as a chat/agent model
     if is_embedding_or_rerank(&id) {
         s -= 1000;
     }
@@ -285,7 +259,6 @@ pub fn score(m: &ModelEntry, cat: Category) -> i64 {
     s
 }
 
-/// Naming-based heuristic for "fast" models (no latency data in the catalog).
 fn fast_score(id: &str) -> i64 {
     let mut s = 0i64;
     for k in [
@@ -319,7 +292,6 @@ fn fast_score(id: &str) -> i64 {
     s
 }
 
-/// Rank models for a problem, best first.
 pub fn rank(
     problem: &str,
     models: &[ModelEntry],
@@ -336,7 +308,6 @@ pub fn rank(
     (cat, scored)
 }
 
-/// Human-readable capability summary for a model.
 pub fn capability_note(m: &ModelEntry) -> String {
     let (intel, code, agentic) = bench(m);
     if intel == 0.0 && code == 0.0 && agentic == 0.0 {
@@ -355,27 +326,19 @@ mod tests {
         assert!(contains_word("api", "api"));
         assert!(!contains_word("rapide", "api"));
         assert!(contains_word("un api ici", "api"));
-        // les lettres accentuées sont des caractères de mot, pas des séparateurs
         assert!(!contains_word("les dérivées de f", "dérivée"));
         assert!(contains_word("les dérivées de f", "dérivées"));
     }
 
-    /// Régression B1 : une borne droite refusée sur un mot-clé multioctet
-    /// faisait avancer `start` d'un octet, en plein milieu d'un `é` -> panic.
     #[test]
     fn contains_word_no_panic_on_multibyte() {
-        // Le panic exige un mot-clé COMMENÇANT par un accent : le match est
-        // refusé (borne droite), puis l'ancien code faisait start = i + 1,
-        // soit le 2e octet du 'é' -> "byte index is not a char boundary".
         assert!(!contains_word("les équations du système", "équation"));
         assert!(!contains_word("il écrit vite", "écris"));
         assert!(!contains_word("les dérivées de f", "dérivée"));
         assert!(!contains_word("des probabilités faibles", "probabilité"));
         assert!(!contains_word("deux intégrales", "intégrale"));
-        // aucun match, texte accentué : doit terminer sans panic
         assert!(!contains_word("éèàçûô", "zzz"));
         assert!(!contains_word("réponse brève", "api"));
-        // et les cas positifs fonctionnent toujours
         assert!(contains_word("les équations du système", "équations"));
     }
 
@@ -390,8 +353,6 @@ mod tests {
             classify("explique-moi pourquoi ça marche"),
             Category::Reasoning
         );
-        // les mots-clés accentués doivent survivre au lowercase
-        // (to_ascii_lowercase les tuait)
         assert_eq!(classify("résous cette équation"), Category::Math);
         assert_eq!(classify("écris un poème"), Category::Writing);
     }

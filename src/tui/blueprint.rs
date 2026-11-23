@@ -1,40 +1,21 @@
-//! Fond « plan » du thème `paper` : cadre gradué, cartouche et trame de points.
-//!
-//! Pourquoi ce fichier séparé : c'est **de la décoration**, pas de la mise en
-//! page. Le chat garde sa géométrie ; on peint seulement des cellules que le
-//! texte ne recouvre pas (la trame est dessinée *avant* les messages, qui
-//! réécrivent leurs propres cellules).
-//!
-//! Contrainte de lisibilité : la trame doit rester **≤ 1,3:1** de contraste avec
-//! le papier, sinon elle détruit la lecture. Sur `paper` (250,249,245), cela
-//! donne `#E4E2D9` — une texture, pas une image.
-//!
-//! Le cadre coûte **une cellule** de marge : l'appelant insère le chat d'un cran
-//! (`rect.inner(Margin::new(1, 1))`) quand ce fond est actif.
-
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::Frame;
 
 use crate::theme;
 
-/// Couleur de la trame (très claire : ~1,2:1 sur le papier).
 const GRID: Color = Color::Rgb(228, 226, 217);
-/// Pas de la trame, en colonnes et en lignes.
 const GRID_X: u16 = 4;
 const GRID_Y: u16 = 2;
 
-/// Le fond « plan » est-il actif ? (thème `paper` uniquement)
 pub fn active() -> bool {
     theme::active().id == "paper"
 }
 
-/// Zone de texte à l'intérieur du cadre.
 pub fn inner(area: Rect) -> Rect {
     area.inner(Margin::new(1, 1))
 }
 
-/// Peint le plan : cadre gradué, cartouche, trame. À appeler **avant** le chat.
 pub fn draw(f: &mut Frame, area: Rect, title: &str) {
     if area.width < 12 || area.height < 4 {
         return;
@@ -52,7 +33,6 @@ pub fn draw(f: &mut Frame, area: Rect, title: &str) {
         }
     };
 
-    // Cadre : traits fins + croix d'angle.
     for x in x0..=x1 {
         put(buf, x, y0, "─", border);
         put(buf, x, y1, "─", border);
@@ -64,8 +44,6 @@ pub fn draw(f: &mut Frame, area: Rect, title: &str) {
     for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
         put(buf, x, y, "┼", border);
     }
-    // Graduations : tous les 8 colonnes en haut/bas, tous les 4 rangs sur les
-    // côtés — comme les repères d'un plan.
     let mut x = x0 + 8;
     while x < x1 {
         put(buf, x, y0, "┬", border);
@@ -79,7 +57,6 @@ pub fn draw(f: &mut Frame, area: Rect, title: &str) {
         y += 4;
     }
 
-    // Cartouche de plan dans le bord supérieur.
     for (tx, ch) in (x0 + 3..x1.saturating_sub(1)).zip(title.chars()) {
         put(
             buf,
@@ -90,7 +67,6 @@ pub fn draw(f: &mut Frame, area: Rect, title: &str) {
         );
     }
 
-    // Trame de points, uniquement dans les cellules vides.
     let inner = inner(area);
     for y in (inner.y..inner.y + inner.height).step_by(GRID_Y as usize) {
         for x in (inner.x..inner.x + inner.width).step_by(GRID_X as usize) {
@@ -111,7 +87,6 @@ mod tests {
         assert!(active());
         crate::theme::activate("noir").unwrap();
         assert!(!active());
-        // Le thème est global : on remet l'état initial pour les autres tests.
         crate::theme::activate("ghost").unwrap();
         assert!(!active());
     }

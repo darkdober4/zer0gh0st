@@ -1,46 +1,27 @@
-//! Client minimaliste pour la passerelle `zer0-gw` (std only — utilisable
-//! depuis le TUI synchrone comme depuis la CLI, sans runtime tokio).
-//!
-//! Sécurité : l'endpoint admin est **loopback + écriture seule**. On peut
-//! *déposer* une clé, jamais la lire — le flux va toujours agent → passerelle.
-//!
-//! Comportement de `provider add <id> <clé>` :
-//! - `zer0-gw` joignable → la clé est déposée sur la passerelle (persistée
-//!   dans son fichier `keys.managed`), le provider `gw-<id>` est créé/activé,
-//!   **aucune clé n'est stockée dans `~/.config/zer0`** ;
-//! - `zer0-gw` absent → repli : stockage local historique, avec avertissement.
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use crate::config::{self, GlobalConfig};
 
-/// URL de la passerelle (surchargeable : `ZER0_GW_URL=http://127.0.0.1:8787`).
 pub fn gw_base() -> String {
     std::env::var("ZER0_GW_URL").unwrap_or_else(|_| "http://127.0.0.1:8787".to_string())
 }
 
-/// Résultat d'un `provider add`.
 pub enum AddRoute {
-    /// Clé déposée sur la passerelle ; agent pointé sur `provider_id` (sans clé).
     ViaGateway { provider_id: String },
-    /// Passerelle absente → stockage local historique.
     Local,
 }
 
-/// Identifiant **côté passerelle** : `gw-openrouter` → `openrouter`, sinon tel quel.
 pub fn gw_target(id: &str) -> String {
     let id = id.trim().to_ascii_lowercase();
     id.strip_prefix("gw-").unwrap_or(&id).to_string()
 }
 
-/// `true` si la passerelle répond (mis en cache 5 s : `resolve()` est appelé souvent).
 pub fn available() -> bool {
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<Option<(std::time::Instant, bool)>>> = OnceLock::new();
     let slot = CACHE.get_or_init(|| Mutex::new(None));
-    // Mutex empoisonné (panic d'un autre thread) : on récupère la garde plutôt
-    // que de paniquer — le cache n'est qu'une optimisation de `probe()`.
     let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((t, v)) = *slot {
         if t.elapsed() < Duration::from_secs(5) {
@@ -52,9 +33,6 @@ pub fn available() -> bool {
     v
 }
 
-/// Requête HTTP/1.1 minimale sur loopback. Retourne `(status, corps)`.
-/// Hôte loopback extrait d'une URL de passerelle (**pur** : testable sans
-/// muter l'environnement — les tests tournent en parallèle).
 fn loopback_host(base: &str) -> Result<&str, String> {
     let rest = base
         .strip_prefix("http://")
@@ -82,8 +60,6 @@ fn http_req(method: &str, path: &str, body: Option<&str>) -> Result<(u16, String
         .map_err(|e| e.to_string())?;
 
     let body = body.unwrap_or("");
-    // Jeton admin si configuré (env prioritaire, sinon config.toml). Sans effet
-    // sur le proxy (chemin `/provider/v1/...`), requis sur `/admin/*`.
     let auth = admin_token()
         .map(|t| format!("x-zer0-admin: {t}\r\n"))
         .unwrap_or_default();
@@ -106,8 +82,6 @@ fn http_req(method: &str, path: &str, body: Option<&str>) -> Result<(u16, String
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| "réponse zer0-gw illisible".to_string())?;
     let (head, body_raw) = buf.split_once("\r\n\r\n").unwrap_or(("", buf.as_str()));
-    // Le proxy de zer0-gw streame (pas de Content-Length) ré => réponses
-    // `Transfer-Encoding: chunked`. On dé-chunke pour pouvoir parser le JSON.
     let body = if head
         .to_ascii_lowercase()
         .contains("transfer-encoding: chunked")
@@ -119,7 +93,6 @@ fn http_req(method: &str, path: &str, body: Option<&str>) -> Result<(u16, String
     Ok((status, body))
 }
 
-/// Décode un corps HTTP `Transfer-Encoding: chunked` en texte brut.
 fn dechunk(s: &str) -> String {
     let mut out = String::new();
     let mut rest = s;
@@ -141,13 +114,10 @@ fn dechunk(s: &str) -> String {
     out
 }
 
-/// `true` si la passerelle répond (`/health`).
 pub fn probe() -> bool {
     matches!(http_req("GET", "/health", None), Ok((200..=299, _)))
 }
 
-/// Jeton admin : `ZER0_GW_ADMIN_TOKEN` (env, prioritaire) sinon `gw_admin_token`
-/// de la config globale. `None` = passerelle sans jeton (loopback historique).
 fn admin_token() -> Option<String> {
     if let Some(t) = std::env::var("ZER0_GW_ADMIN_TOKEN")
         .ok()
@@ -162,9 +132,6 @@ fn admin_token() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Enregistre (ou met à jour) un provider sur la passerelle — écriture seule,
-/// aucune clé. Idempotent : met à jour `base_url` si le provider existe déjà.
-/// Retourne une erreur si la passerelle est absente ou refuse (id/base_url).
 pub fn register_provider(id: &str, base_url: &str) -> Result<(), String> {
     if !probe() {
         return Err("zer0-gw injoignable (sudo systemctl start zer0-gw)".to_string());
@@ -177,13 +144,10 @@ pub fn register_provider(id: &str, base_url: &str) -> Result<(), String> {
     }
 }
 
-/// Sonde `GET /{id}/v1/models` **à travers la passerelle** (le chemin réel).
-/// `Err` = injoignable ; sinon `(status HTTP, corps)`.
 pub fn probe_models(id: &str) -> Result<(u16, String), String> {
     http_req("GET", &format!("/{id}/v1/models"), None)
 }
 
-/// Sonde `POST /{id}/v1/chat/completions` (1 token) à travers la passerelle.
 pub fn probe_chat(id: &str, model: &str) -> Result<(u16, String), String> {
     let body = serde_json::json!({
         "model": model,
@@ -195,9 +159,6 @@ pub fn probe_chat(id: &str, model: &str) -> Result<(u16, String), String> {
     http_req("POST", &format!("/{id}/v1/chat/completions"), Some(&body))
 }
 
-/// Jusqu'à `max` ids de modèles d'une réponse `GET /v1/models` (`data[i].id`).
-/// Les premiers `[0..max]` suffisent pour sonder : un seul modèle en 404 ne
-/// condamne pas le provider (listes d'agrégateurs comme NVIDIA/OpenRouter).
 pub fn model_ids(models_body: &str, max: usize) -> Vec<String> {
     serde_json::from_str::<serde_json::Value>(models_body)
         .ok()
@@ -211,12 +172,10 @@ pub fn model_ids(models_body: &str, max: usize) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Premier id de modèle d'une réponse `GET /v1/models` (`data[0].id`).
 pub fn first_model_id(models_body: &str) -> Option<String> {
     model_ids(models_body, 1).into_iter().next()
 }
 
-/// Providers connus de la passerelle et présence d'une clé (jamais la valeur).
 pub fn list_keys() -> Result<Vec<(String, bool)>, String> {
     let (status, body) = http_req("GET", "/admin/keys", None)?;
     if !(200..=299).contains(&status) {
@@ -243,7 +202,6 @@ pub fn list_keys() -> Result<Vec<(String, bool)>, String> {
     Ok(out)
 }
 
-/// Dépose une clé pour `gw_id` — écriture seule, la valeur n'est jamais relue.
 fn post_key(gw_id: &str, key: &str) -> Result<(), String> {
     let payload = serde_json::json!({ "api_key": key }).to_string();
     let (status, body) = http_req("POST", &format!("/admin/keys/{gw_id}"), Some(&payload))?;
@@ -257,25 +215,21 @@ fn post_key(gw_id: &str, key: &str) -> Result<(), String> {
     }
 }
 
-/// Dépose une clé pour `id` (résout l'id passerelle). Écriture seule.
 pub fn set_key(id: &str, key: &str) -> Result<(), String> {
     post_key(&gw_target(id), key)
 }
 
-/// Demande à la passerelle d'oublier une clé (best-effort pour `provider remove`).
 pub fn delete_key(id: &str) -> Result<(), String> {
     let gw_id = gw_target(id);
     match http_req("DELETE", &format!("/admin/keys/{gw_id}"), None) {
-        Ok((200..=299, _)) | Err(_) => Ok(()), // passerelle absente : pas grave
+        Ok((200..=299, _)) | Err(_) => Ok(()),
         Ok((s, b)) => Err(format!("zer0-gw ({s}) : {b}")),
     }
 }
 
-/// Flux complet de `provider add <id> <clé>` quand une clé explicite est fournie.
 pub fn add_key_flow(id: &str, key: &str) -> Result<AddRoute, String> {
     let id = id.trim().to_ascii_lowercase();
     if id == "local" {
-        // llama-server n'a pas de clé : rien à déposer.
         return Ok(AddRoute::Local);
     }
     if !probe() {
@@ -283,14 +237,9 @@ pub fn add_key_flow(id: &str, key: &str) -> Result<AddRoute, String> {
     }
     let gw_id = gw_target(&id);
     post_key(&gw_id, key)?;
-    // Un seul identifiant : le provider reste `openrouter`, `nvidia`… ; c'est
-    // `config::resolve` qui décide du transport (passerelle ou direct).
     Ok(AddRoute::ViaGateway { provider_id: gw_id })
 }
 
-/// Active `provider_id` en mode passerelle : aucun provider `gw-*`, aucune clé
-/// locale. Supprime aussi une éventuelle entrée héritée `[custom.gw-<id>]`.
-/// Retourne `(nom, base_url)` pour l'état du TUI/CLI.
 pub fn activate_provider(g: &mut GlobalConfig, provider_id: &str) -> (String, String) {
     g.custom.remove(&format!("gw-{provider_id}"));
     g.provider = Some(provider_id.to_string());
@@ -308,7 +257,6 @@ mod tests {
 
     #[test]
     fn dechunk_rebuilds_body() {
-        // Deux chunks "Hello " (6) et "world" (5), fin 0.
         let raw = "6\r\nHello \r\n5\r\nworld\r\n0\r\n\r\n";
         assert_eq!(dechunk(raw), "Hello world");
     }
@@ -343,15 +291,12 @@ mod tests {
 
     #[test]
     fn gateway_url_uses_plain_provider_id() {
-        // Un seul identifiant : plus de préfixe `gw-` côté agent.
         assert_eq!(gw_target("gw-openrouter"), "openrouter");
         assert!(gw_base().starts_with("http://"));
     }
 
     #[test]
     fn gw_url_rejects_non_loopback_scheme() {
-        // Fonction **pure** : pas de mutation d'environnement (course en
-        // parallèle → CI instable).
         let err = loopback_host("https://evil.example").err().unwrap();
         assert!(err.contains("http://"));
         assert!(loopback_host("http://127.0.0.1:8787").is_ok());

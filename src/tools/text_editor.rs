@@ -82,12 +82,6 @@ pub fn run(args: &str) -> String {
     }
 }
 
-/// Sauvegarde le fichier avant de l'écraser ou de le supprimer.
-///
-/// ZER0|GH0ST agit avec les droits de l'utilisateur, sans bac à sable. Un outil
-/// qui réécrit un fichier sans garder de copie rend toute erreur du modèle
-/// irréversible. La sauvegarde est posée **à côté** du fichier (`<nom>.zer0.bak`),
-/// donc trouvable sans connaître l'état interne de l'agent.
 fn backup(path: &Path) -> Option<String> {
     let meta = fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() == 0 {
@@ -120,8 +114,6 @@ fn view(path: &str, offset: Option<usize>, limit: Option<usize>) -> String {
             let lines: Vec<&str> = content.lines().collect();
             let total = lines.len();
             let start = offset.unwrap_or(1).max(1);
-            // 400 lignes par défaut : un README de 600 lignes ne doit plus être
-            // avalé d'un coup (le modèle demande la suite avec `offset`).
             let count = limit.unwrap_or(400).clamp(1, 2_000);
             let from = (start - 1).min(total);
             let to = (from + count).min(total);
@@ -154,13 +146,8 @@ fn view(path: &str, offset: Option<usize>, limit: Option<usize>) -> String {
     }
 }
 
-/// Lignes de diff affichées dans le résultat (repliable dans la TUI).
 const DIFF_MAX_LINES: usize = 40;
 
-/// Bloc ```diff``` à ajouter au résultat, ou chaîne vide si rien n'a bougé.
-///
-/// Le bloc part **dans le résultat de l'outil** : l'agent comme l'utilisateur
-/// voient la même chose, et la TUI n'a aucune lecture de fichier à refaire.
 fn diff_block(before: &str, after: &str) -> String {
     let d = crate::diff::unified(before, after);
     if d.is_empty() {
@@ -172,10 +159,6 @@ fn diff_block(before: &str, after: &str) -> String {
     out
 }
 
-/// Suffixe lisible : ` (+3 / -1)` + avertissement de réécriture.
-///
-/// Le compteur est ce qui reste visible quand le message est replié à 3 lignes :
-/// il doit donc porter l'information la plus utile.
 fn diff_suffix(before: &str, after: &str) -> String {
     let d = crate::diff::unified(before, after);
     if d.is_empty() {
@@ -189,7 +172,6 @@ fn diff_suffix(before: &str, after: &str) -> String {
 }
 
 fn create(path: &str, content: &str) -> String {
-    // Guard: never silently write an empty file.
     if content.trim().is_empty() {
         return format!(
             "Erreur: contenu vide — `{path}` n'a PAS été écrit. \
@@ -204,26 +186,21 @@ fn create(path: &str, content: &str) -> String {
             }
         }
     }
-    // Contenu précédent (le cas « create » sur un fichier existant est une
-    // réécriture : c'est justement ce que le diff doit rendre visible).
     let before = fs::read_to_string(path).unwrap_or_default();
     let note = backup_note(Path::new(path));
     match fs::write(path, content) {
-        Ok(()) => {
-            // Verify the write actually landed.
-            match fs::metadata(path) {
-                Ok(m) if m.len() > 0 => {
-                    let first = content.lines().next().unwrap_or("");
-                    format!(
-                        "Fichier écrit: {path}{} ({}). Première ligne: {first}{note}{diff}",
-                        diff_suffix(&before, content),
-                        stats(content),
-                        diff = diff_block(&before, content)
-                    )
-                }
-                _ => format!("Erreur: {path} est vide après écriture."),
+        Ok(()) => match fs::metadata(path) {
+            Ok(m) if m.len() > 0 => {
+                let first = content.lines().next().unwrap_or("");
+                format!(
+                    "Fichier écrit: {path}{} ({}). Première ligne: {first}{note}{diff}",
+                    diff_suffix(&before, content),
+                    stats(content),
+                    diff = diff_block(&before, content)
+                )
             }
-        }
+            _ => format!("Erreur: {path} est vide après écriture."),
+        },
         Err(e) => format!("Erreur d'écriture: {e}"),
     }
 }
@@ -257,10 +234,6 @@ fn str_replace(path: &str, old: &str, new: &str) -> String {
 }
 
 fn insert(path: &str, line: usize, text: &str) -> String {
-    // B7 : aligné sur `create`/`str_replace`/`delete`. `insert` réécrit tout le
-    // fichier (`lines.join`), c'est l'opération la plus risquée : sans ces
-    // gardes, une ligne 0 insérait silencieusement en tête et un texte vide
-    // ajoutait une ligne fantôme.
     if text.is_empty() {
         return format!("Erreur: `new_str` vide pour {path} — rien n'a été inséré");
     }
@@ -271,8 +244,6 @@ fn insert(path: &str, line: usize, text: &str) -> String {
         Ok(c) => c,
         Err(e) => return format!("Erreur de lecture: {e}"),
     };
-    // On préserve la présence (ou l'absence) de newline final : insérer une ligne
-    // ne doit pas réécrire la fin du fichier.
     let had_trailing_newline = content.ends_with('\n');
     let mut lines: Vec<&str> = content.lines().collect();
     let idx = (line - 1).min(lines.len());
@@ -315,8 +286,6 @@ fn delete(path: &str) -> String {
 }
 
 fn truncate(mut s: String, max: usize) -> String {
-    // Troncature sûre : `String::truncate` panique au milieu d'un caractère
-    // multi-octets (fichier français > 16 Ko → crash de la tâche de génération).
     if crate::util::truncate_utf8(&mut s, max) {
         s.push_str("\n… (tronqué)");
     }
@@ -394,7 +363,6 @@ mod tests {
         let _ = fs::remove_file(&p);
     }
 
-    /// B7 : `insert` doit sauvegarder comme `create`/`str_replace`/`delete`.
     #[test]
     fn insert_creates_a_backup_like_the_other_commands() {
         let p = tmp("b7_backup.txt");
@@ -411,7 +379,6 @@ mod tests {
         let _ = fs::remove_file(&bak);
     }
 
-    /// B7 : une ligne 0 insérait silencieusement en tête du fichier.
     #[test]
     fn insert_rejects_line_zero() {
         let p = tmp("b7_line0.txt");
@@ -426,7 +393,6 @@ mod tests {
         let _ = fs::remove_file(&p);
     }
 
-    /// B7 : un texte vide ajoutait une ligne fantôme.
     #[test]
     fn insert_rejects_empty_text() {
         let p = tmp("b7_empty.txt");
@@ -441,8 +407,6 @@ mod tests {
         let _ = fs::remove_file(&p);
     }
 
-    /// Régression : `view` sur un fichier français > 16 Ko faisait paniquer
-    /// `String::truncate` (frontière UTF-8).
     #[test]
     fn view_multibyte_file_does_not_panic() {
         let p = tmp("fr.txt");
@@ -501,10 +465,8 @@ mod diff_tests {
             "fn a() {\n    un();\n    deux();\n    trois();\n}\n",
         );
         let out = str_replace(&path, "    deux();\n", "    deux_modified();\n");
-        // Première ligne : lisible même replié (compteur visible).
         let first = out.lines().next().unwrap();
         assert!(first.contains("(+1 / -1)"), "compteur absent : {first}");
-        // Bloc diff exploitable par la TUI.
         assert!(out.contains("```diff"), "bloc diff absent : {out}");
         assert!(
             out.contains("\n-     deux();"),

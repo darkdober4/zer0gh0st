@@ -30,8 +30,6 @@ use crate::select;
 use crate::theme;
 use crate::tools::ToolSpec;
 
-/// Assemble le prompt système de base et, si elle existe, le texte du persona.
-/// (fonction pure : testable sans App ni disque)
 fn compose_system(base: &str, persona: Option<(&str, &str)>) -> String {
     match persona {
         Some((name, content)) => format!("{base}\n\n## Persona : {name}\n{content}"),
@@ -39,8 +37,6 @@ fn compose_system(base: &str, persona: Option<(&str, &str)>) -> String {
     }
 }
 
-/// Aide par défaut : uniquement ce dont un nouvel utilisateur a besoin.
-/// Le reste est derrière `/help all` (le pouvoir reste, le bruit part).
 const HELP_SHORT: &str =
     "Commandes essentielles (tape `/` pour la palette, `/help all` pour tout) :
 
@@ -69,34 +65,24 @@ const HELP_SHORT: &str =
 pub struct App {
     pub messages: Vec<ChatMessage>,
     pub input: String,
-    /// Position du curseur dans `input` (index **en caractères**).
     pub cursor: usize,
     pub should_quit: bool,
     pub streaming: bool,
     pub streaming_text: String,
     pub reasoning_text: String,
-    /// Animates the banner (rainbow phase).
     pub anim_phase: u16,
-    /// Chat scroll offset from the top, and whether we follow new output.
     pub scroll: u16,
     pub auto_scroll: bool,
     pub max_scroll: u16,
     pub thinking: bool,
     pub max_tokens: u32,
     pub temperature: f32,
-    /// Real conversation history (conversation roles only).
     pub conversation: Vec<ChatMessage>,
-    /// Display index where transient turn output begins.
     pub display_mark: usize,
-    /// System prompt (kept for commands like /compact).
     pub system: String,
-    /// Base system prompt without any persona applied.
     pub base_system: String,
-    /// Prompt dédié au mode local (court, sans les fonctions cloud).
     pub system_local: String,
-    /// Streaming réseau (`/stream off` = réponse en un bloc).
     pub stream_enabled: bool,
-    /// Active persona name, if any.
     pub persona: Option<String>,
     pub all_tools: Vec<ToolSpec>,
     pub read_write: bool,
@@ -106,107 +92,59 @@ pub struct App {
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
-    /// Endpoint actually used last (after failover), for the status bar.
     pub active_endpoint: String,
-    /// Forced role (None = auto-select per message).
     pub forced_role: Option<String>,
-    /// Role chosen for the last message.
     pub last_role: String,
-    /// Routage par rôle actif (miroir de la config, pour l'affichage).
     pub roles_enabled: bool,
-    /// Sélecteur ouvert (`/model` ou `/provider` sans argument).
     pub picker: Option<picker::Picker>,
-    /// Assistant de première connexion (écran plein).
     pub wizard: Option<wizard::Wizard>,
-    /// Overlay `/provider add` (ajout guidé d'un provider).
     pub provider_add: Option<provider_add::ProviderAdd>,
-    /// Saisie masquée (clé API, jeton) : le buffer reste réel, l'affichage non.
     pub secret_mode: bool,
-    /// Mod « 0cg » : watchlist crypto (panneau latéral). `None` = jamais ouvert.
     pub cg: Option<crate::fun::cg::Cg>,
-    /// Cible à appliquer quand la liste de modèles arrivera (ex. rôle à définir).
     pub pending_picker_target: Option<String>,
-    /// Liste de tâches animée : (index du message, tâches chargées).
     pub task_view: Option<(usize, Vec<crate::tasks::Task>)>,
-    /// Image en attente, jointe au prochain message envoyé (data URL).
     pub pending_image: Option<String>,
     pub pending_image_name: Option<String>,
-    /// Ids de modèles acceptant une image, d'après le catalogue `/models`.
     pub vision_models: Vec<String>,
-    /// Zone du fil de conversation (clic droit, molette).
     pub chat_rect: Rect,
-    /// Défilement réellement appliqué au fil.
     pub chat_scroll: u16,
-    /// Cache de rendu : (index du message, largeur, empreinte) → lignes.
-    ///
-    /// Sans lui, chaque frame re-découpait et re-parsait **toute** la
-    /// conversation (O(conversation) par frame, donc par token). Le cache est
-    /// invalidé quand le nombre de messages change.
     pub chat_cache: std::collections::HashMap<(usize, u16, u64), Vec<Line<'static>>>,
-    /// Nombre de messages au moment où le cache a été vidé pour la dernière fois.
     pub chat_cache_len: usize,
-    /// Blocs de sortie d'outil rendus : (1ʳᵉ ligne, dernière ligne, index message).
     pub block_ranges: Vec<(u16, u16, usize)>,
-    /// Full-screen fun mode (chat by default).
     pub mode: crate::fun::Mode,
     pub radio: crate::fun::radio::Radio,
     pub bintime: crate::fun::bintime::BinTime,
     pub pong: crate::fun::pong::Pong,
-    /// Side panel (right of the agent): bintime or radio.
     pub side_mode: Option<crate::fun::Mode>,
-    /// Mod `t0p` (moniteur) : créé à la demande (le warmup prend ~250 ms).
     pub top: Option<crate::fun::top::Top>,
-    /// Mod `0file` (explorateur) : créé à la demande.
     pub file: Option<crate::fun::file::FileExplorer>,
-    /// Mod `zer0CL` (shell) : créé à la demande.
     pub term: Option<crate::fun::term::Term>,
-    /// Registry des modules fun dynamiques (chargés depuis .so).
     pub fun_registry: Option<crate::fun::FunRegistry>,
-    /// Module fun dynamique actif (nom du module).
     pub active_fun_module: Option<String>,
-    /// Overlay `/zer0build` (aide et gestion des modules).
     pub zer0build_overlay: bool,
-    /// Zone écran du panneau 0file (molette / clics).
     pub file_rect: Rect,
-    /// Zone écran du panneau zer0CL (molette).
     pub term_rect: Rect,
-    /// Whether the side panel has keyboard focus.
     pub focus_panel: bool,
-    /// Auto-inject relevant knowledge into the prompt.
     pub kb_auto: bool,
-    /// Input history (recall with ↑/↓).
     pub history: Vec<String>,
     pub hist_pos: Option<usize>,
     pub hist_draft: String,
-    /// Zero-chan (voice assistant).
     pub zc: crate::zerochan::ZeroChan,
     pub btn_0chan: Option<Rect>,
     pub btn_mic: Option<Rect>,
-    /// Vote : compteur de stars GitHub observé (None = inconnu).
     pub vote_stars: Option<u64>,
-    /// Vote : le compte courant a-t-il starré le dépôt ? (None = inconnu).
     pub vote_starred: Option<bool>,
-    /// Zones cliquables des pouces (bas-droite de l'écran principal).
     pub btn_vote_up: Option<Rect>,
     pub btn_vote_down: Option<Rect>,
-    /// Sélection souris (texte affiché à l'écran).
     pub sel_anchor: Option<(u16, u16)>,
     pub sel_head: Option<(u16, u16)>,
     pub screen: Vec<String>,
-    /// Si Some, affiche le pop-up d'anciennes conversations avec (liste des fichiers, index sélectionné).
     pub chats_popup: Option<(Vec<std::path::PathBuf>, usize)>,
-    /// Fenêtre de contexte du modèle actif (tokens).
     pub context_window: u64,
-    /// L'utilisateur a forcé le contexte (/ctx) — la sonde ne l'écrase pas.
     pub ctx_manual: bool,
-    /// Bot Telegram lancé depuis la TUI (None = arrêté).
     pub tg: Option<crate::telegram::Handle>,
-    /// Zone écran du panneau latéral quand un mod est ouvert : c'est de son
-    /// bord que part l'onde néon.
     pub panel_rect: Rect,
-    /// Dernier événement clavier traité (pour déduplication sur Windows).
     pub last_key_event: Option<(KeyCode, KeyModifiers, std::time::Instant)>,
-    /// Animation « baleine deepseek » en cours (None = rien à l'écran).
     pub whale: Option<whale::Whale>,
 }
 
@@ -221,11 +159,6 @@ impl App {
         }
     }
 
-    /// Context d'exécution des outils (`0box`) : réinstallé à chaque changement
-    /// de politique d'outils (F3/F4, `/readwrite`, `/codeexec`).
-    ///
-    /// Sans ça, l'outil `0box` gardait la politique du démarrage : désactiver
-    /// `code_exec` après coup ne retirait pas le shell aux sous-agents.
     pub fn refresh_runtime(&self) {
         crate::tools::set_runtime(crate::tools::Runtime {
             settings: self.settings(),
@@ -244,11 +177,6 @@ impl App {
         });
     }
 
-    /// Recharge provider / modèle / clé depuis la config.
-    ///
-    /// Nécessaire après `/provider add|use|remove` : la TUI gardait sinon des
-    /// valeurs périmées (ancien base_url, ancienne clé, ancien modèle) alors que
-    /// la config avait changé — divergence classique avec le CLI.
     pub fn reload_settings(&mut self) {
         let s = config::resolve();
         self.provider_id = s.provider_id;
@@ -259,7 +187,6 @@ impl App {
         self.roles_enabled = config::roles_enabled();
     }
 
-    /// Recompute the effective system prompt from base + active persona.
     fn refresh_system(&mut self) {
         let persona = self
             .persona
@@ -310,8 +237,6 @@ pub async fn run(
     let ctx_override = config::load_global().context_window;
     let ctx_win = ctx_override
         .or_else(|| known_context(&settings.model))
-        // Inconnu : on suppose 32 k plutôt que 200 k. Surestimer la fenêtre
-        // fait envoyer un historique trop long, que le provider refuse (400).
         .unwrap_or(32_768);
 
     let mut initial_messages = vec![ChatMessage::notice(
@@ -407,17 +332,13 @@ pub async fn run(
         temperature: options.temperature,
     };
 
-    // Contexte runtime pour l'outil `0box` (débat réel lancé par le modèle) :
-    // mêmes réglages, mêmes options, mêmes outils que la TUI.
     app.refresh_runtime();
 
-    // Config illisible = clés potentiellement perdues : on le montre une fois.
     if let Some(msg) = config::corruption() {
         app.messages
             .push(ChatMessage::notice(format!("⚠ configuration : {msg}")));
     }
 
-    // Mode local : dire tout de suite ce qui ne s'applique pas.
     if config::resolve().provider_id == "local" {
         let mut msg = String::from("🖥 Mode local — un seul modèle chargé. Non disponible :\n");
         for l in crate::local::limitations() {
@@ -426,8 +347,6 @@ pub async fn run(
         msg.push_str("  · llama-server est préchargé en arrière-plan (port 8080).");
         app.messages.push(ChatMessage::notice(msg));
 
-        // Préchargement : on paie les ~4 s de démarrage pendant que
-        // l'utilisateur lit l'écran, au lieu de les payer au premier message.
         let ui = ui_tx.clone();
         let model = app.model.clone();
         tokio::spawn(async move {
@@ -448,8 +367,6 @@ pub async fn run(
         });
     }
 
-    // Planificateur : rappelle les tâches arrivées à échéance (une fois par
-    // session et par tâche). Aucune exécution automatique : c'est un rappel.
     {
         let ui = ui_tx.clone();
         tokio::spawn(async move {
@@ -472,8 +389,6 @@ pub async fn run(
         });
     }
 
-    // Persona persistée : on la restaure au démarrage (elle l'était pas avant,
-    // donc `/whoami` semblait ne pas agir après un relancement).
     if let Some(name) = config::load_global().persona.clone() {
         if crate::personas::get(&name).is_some() {
             app.persona = Some(name.clone());
@@ -484,8 +399,6 @@ pub async fn run(
         }
     }
 
-    // Première connexion (ou assistant interrompu) : on prend l'utilisateur par
-    // la main. `--resume`/`--once` ne sont pas concernés (headless).
     {
         let g = config::load_global();
         if !g.setup_done {
@@ -494,8 +407,6 @@ pub async fn run(
         }
     }
 
-    // Démarrage = NOUVELLE conversation (l'ancienne est archivée → F6).
-    // Avec `--resume`, on reprend la conversation active à la place.
     if resume {
         let restored = crate::convo::load_repaired(200);
         if !restored.is_empty() {
@@ -516,15 +427,11 @@ pub async fn run(
 
     probe_context(&app, &ui_tx);
 
-    // Vote : au tout premier lancement, on propose de connecter GitHub (une
-    // fois) ; ensuite on se contente d'un rappel discret. Sans jeton, le 👍
-    // ouvre le navigateur au lieu de poser une vraie star.
     if let Some(msg) = crate::vote::invitation_startup() {
         app.messages.push(ChatMessage::notice(msg));
         crate::vote::note_rappel();
     }
 
-    // Vote : compteur de stars + état du compte (chargé une fois, en tâche de fond).
     {
         let ui = ui_tx.clone();
         tokio::spawn(async move {
@@ -556,10 +463,6 @@ async fn event_loop(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        // Coalescence : on applique **tout** ce qui est déjà arrivé avant de
-        // dessiner. Sans ça, chaque `UiEvent::Token` déclenchait un rendu complet
-        // de la conversation (re-wrap + re-parse markdown de tous les messages),
-        // soit O(conversation) par token.
         while let Ok(ev) = ui_rx.try_recv() {
             apply_ui(ev, app, ui_tx);
         }
@@ -582,18 +485,13 @@ async fn event_loop(
                 || app.side_mode.is_some()
                 || app.zc.on
                 || app.task_view.is_some()
-                // Animation « baleine deepseek » en cours.
                 || app.whale.is_some()
-                // Clignotement de l'avertissement F4 (shell désarmé).
                 || !app.code_exec =>
             {
                 app.anim_phase = app.anim_phase.wrapping_add(6);
-                // L'animation de la baleine se termine toute seule : on la retire
-                // pour que le ticker (`if … || app.whale.is_some()`) s'arrête.
                 if app.whale.as_ref().is_some_and(|w| w.done()) {
                     app.whale = None;
                 }
-                // Animation des tâches en cours (un pas toutes les ~480 ms).
                 if let Some((idx, tasks)) = app.task_view.clone() {
                     let still_there = app
                         .messages
@@ -617,7 +515,6 @@ async fn event_loop(
                 }
                 if app.zc.on {
                     app.zc.tick();
-                    // Arrêt automatique de l'écoute après MAX_REC_SECS.
                     if let Some(el) = app.zc.rec_elapsed() {
                         if el > crate::zerochan::MAX_REC_SECS {
                             toggle_mic(app, ui_tx);
@@ -649,7 +546,6 @@ async fn event_loop(
                 if app.mode == crate::fun::Mode::Pong {
                     app.pong.step();
                 }
-                // Tick du module fun dynamique actif
                 if let Some(module_name) = &app.active_fun_module {
                     if let Some(registry) = &mut app.fun_registry {
                         let mut ctx = zer0fun_api::Context {
@@ -663,7 +559,6 @@ async fn event_loop(
                         }
                     }
                 }
-                // Hot-reload : vérifier les mises à jour des modules
                 if let Some(registry) = &mut app.fun_registry {
                     let reloaded = registry.check_updates().unwrap_or_default();
                     for name in reloaded {
@@ -683,8 +578,6 @@ async fn event_loop(
     Ok(())
 }
 
-/// Applique un `UiEvent`. `Voice` a un effet de bord (il envoie le message),
-/// d'où ce point d'entrée unique partagé par la boucle et la coalescence.
 fn apply_ui(ev: UiEvent, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     match ev {
         UiEvent::Voice(t) => {
@@ -696,9 +589,6 @@ fn apply_ui(ev: UiEvent, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     }
 }
 
-/// Base system prompt + liste explicite des outils (ce modèle ignore souvent le
-/// paramètre `tools` de l'API ; il faut le lui dire dans le prompt). Utile pour
-/// les sous-agents qui reçoivent des outils (sinon le modèle « hallucine »).
 fn system_with_tools(base: &str, tools: &[ToolSpec]) -> String {
     let mut s = base.to_string();
     if !tools.is_empty() {
@@ -713,8 +603,6 @@ fn system_with_tools(base: &str, tools: &[ToolSpec]) -> String {
 }
 
 fn start_turn(app: &mut App, text: String, ui_tx: &UnboundedSender<UiEvent>) {
-    // Effacer avant de lancer la tâche : Échap immédiatement après l'envoi
-    // ne doit pas être effacé au démarrage asynchrone du tour.
     crate::cancel::clear();
     let role = match &app.forced_role {
         Some(r) => r.clone(),
@@ -760,19 +648,14 @@ fn start_turn(app: &mut App, text: String, ui_tx: &UnboundedSender<UiEvent>) {
         })
         .cloned()
         .collect();
-    // Local = chat conversationnel : aucun outil (l'agent outillé est cloud).
     let tools = if app.provider_id == "local" {
         Vec::new()
     } else {
         tools
     };
 
-    // Deux prompts distincts : court pour le local (CPU), complet pour le cloud.
     let system = crate::local::pick_system(&app.provider_id, &app.system, &app.system_local);
-    // llama.cpp ≥ 0.6 gère les outils natifs. `ZER0_LOCAL_TOOLS=prompt` force
-    // le protocole texte pour un serveur ancien (qui figeait dès 2 outils).
     let local_mode = app.provider_id == "local";
-    // Local : raisonnement coupé côté serveur, aucun outil envoyé.
     let options = ChatOptions {
         max_tokens: app.max_tokens,
         thinking: app.thinking,
@@ -782,13 +665,11 @@ fn start_turn(app: &mut App, text: String, ui_tx: &UnboundedSender<UiEvent>) {
         local: local_mode,
     };
     let messages = app.conversation.clone();
-    // Pas de base de connaissances en local : tokens de préfill inutiles.
     let kb_auto = app.kb_auto && !local_mode;
     let ctx_window = app.context_window;
     let settings = app.settings();
     let ui = ui_tx.clone();
     tokio::spawn(async move {
-        // Mode local : llama-server doit tourner avant tout appel.
         if settings.provider_id == "local" {
             if crate::cancel::is_cancelled() {
                 let _ = ui.send(UiEvent::TurnComplete(messages));
@@ -807,8 +688,6 @@ fn start_turn(app: &mut App, text: String, ui_tx: &UnboundedSender<UiEvent>) {
                     "⏳ mode local : démarrage de llama-server…".into(),
                 ));
             }
-            // Le serveur peut continuer à démarrer : ce n'est pas une réponse
-            // de l'agent et on ne tue pas un serveur potentiellement partagé.
             let local = tokio::select! {
                 biased;
                 _ = crate::cancel::cancelled() => {
@@ -828,8 +707,6 @@ fn start_turn(app: &mut App, text: String, ui_tx: &UnboundedSender<UiEvent>) {
             }
         }
         let mut system = system;
-        // Liste explicite des outils disponibles : ce modèle ignore souvent le
-        // paramètre `tools` de l'API, il faut le lui dire dans le prompt.
         if !tools.is_empty() {
             system.push_str(
                 "\n\n## Outils disponibles (utilise-les pour AGIR — ne dis jamais « je ne peux pas exécuter » quand un outil le permet)\n",
@@ -838,7 +715,6 @@ fn start_turn(app: &mut App, text: String, ui_tx: &UnboundedSender<UiEvent>) {
                 system.push_str(&format!("- {} : {}\n", t.name, t.description));
             }
         }
-        // Connaissance locale : bloc partagé avec `--once` (`crate::knowledge_block`).
         if kb_auto {
             let knowledge = tokio::select! {
                 biased;
@@ -857,8 +733,6 @@ fn start_turn(app: &mut App, text: String, ui_tx: &UnboundedSender<UiEvent>) {
             }
         }
         let mut base = messages;
-        // Seuil de compaction : 60 % de la fenêtre **réelle** du modèle (min
-        // 4 000). Définition unique dans `compact::budget_for`.
         let budget = crate::agent::compact::budget_for(ctx_window);
         if crate::agent::compact::estimate_tokens(&base) >= budget {
             let (b, outcome) = tokio::select! {
@@ -896,16 +770,12 @@ fn send_message(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     app.input.clear();
     app.cursor = 0;
 
-    // Historique d'entrée (↑ le rappelle). On n'y met JAMAIS une commande
-    // porteuse de secret (`/provider add … <clé>`, `/login`, `/vault`…) :
-    // l'historique est persisté sur disque et relu à la frappe.
     if !contains_secret(&text) && !app.history.last().map(|h| h == &text).unwrap_or(false) {
         app.history.push(text.clone());
     }
     app.hist_pos = None;
     app.hist_draft.clear();
 
-    // Les commandes restent disponibles PENDANT une génération (/stop, /telegram…).
     if text.starts_with('/') {
         handle_command(app, &text, ui_tx);
         return;
@@ -917,11 +787,6 @@ fn send_message(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     start_turn(app, text, ui_tx);
 }
 
-/// Une commande porte-t-elle un secret qui ne doit pas finir dans l'historique
-/// d'entrée (persisté sur disque) ?
-///
-/// Volontairement large : mieux vaut perdre le rappel ↑ d'une commande que
-/// laisser une clé API en clair dans `~/.local/share/zer0gh0st/history`.
 fn contains_secret(text: &str) -> bool {
     let t = text.trim();
     if !t.starts_with('/') {
@@ -930,13 +795,10 @@ fn contains_secret(text: &str) -> bool {
     let mut words = t.split_whitespace();
     let cmd = words.next().unwrap_or("");
     match cmd {
-        // `/provider add <id> [<base_url>] [<nom>] <clé>` : tout ajout porte
-        // une clé, sauf la forme nue qui ouvre l'overlay.
         "/provider" => {
             let sub = words.next().unwrap_or("");
             sub == "add" && words.next().is_some()
         }
-        // Commandes dont chaque argument est un secret.
         "/login" | "/vault" | "/remember" => words.next().is_some(),
         _ => false,
     }
@@ -952,7 +814,6 @@ fn nudge(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     start_turn(app, text, ui_tx);
 }
 
-/// Échap et /stop demandent le même arrêt coopératif, sans fermer la TUI.
 fn request_stop(app: &mut App) {
     if app.streaming {
         if !crate::cancel::is_cancelled() {
@@ -965,13 +826,11 @@ fn request_stop(app: &mut App) {
     }
 }
 
-/// Convertit un événement clavier crossterm en événement zer0fun.
 fn convert_key_event(k: crossterm::event::KeyEvent) -> zer0fun_api::Event {
     use zer0fun_api::{Event, KeyEvent};
 
     let key = match k.code {
         KeyCode::Char(c) => {
-            // Gérer les modificateurs Ctrl
             if k.modifiers.contains(KeyModifiers::CONTROL) {
                 KeyEvent::Ctrl(c)
             } else if k.modifiers.contains(KeyModifiers::ALT) {
@@ -1146,120 +1005,115 @@ fn handle_command(app: &mut App, text: &str, ui_tx: &UnboundedSender<UiEvent>) {
             app.pong = crate::fun::pong::Pong::new();
             app.mode = crate::fun::Mode::Pong;
         }
-        "/fun" => {
-            // Gestion des modules fun dynamiques
-            match args.first().copied() {
-                Some("list") | None => {
-                    // Liste les modules chargés
-                    if let Some(registry) = &app.fun_registry {
-                        let modules = registry.list_meta();
-                        if modules.is_empty() {
-                            app.messages.push(ChatMessage::notice(
-                                "Aucun module fun dynamique chargé.\n\
-                                Utiliser 'zer0build install' pour installer des modules.",
-                            ));
-                        } else {
-                            let mut s = String::from("Modules fun dynamiques :\n\n");
-                            for meta in modules {
-                                s.push_str(&format!(
-                                    "  {} v{} — {}\n    catégorie: {:?} | permissions: {:?}\n\n",
-                                    meta.name,
-                                    meta.version,
-                                    meta.description,
-                                    meta.category,
-                                    meta.permissions
-                                ));
-                            }
-                            s.push_str(&format!(
-                                "Répertoire: {}\n\
-                                Commandes: /<module> pour activer, /fun reload pour recharger",
-                                registry.modules_dir.display()
-                            ));
-                            app.messages.push(ChatMessage::notice(s));
-                        }
-                    } else {
+        "/fun" => match args.first().copied() {
+            Some("list") | None => {
+                if let Some(registry) = &app.fun_registry {
+                    let modules = registry.list_meta();
+                    if modules.is_empty() {
                         app.messages.push(ChatMessage::notice(
-                            "Registry de modules fun non initialisé.",
+                            "Aucun module fun dynamique chargé.\n\
+                                Utiliser 'zer0build install' pour installer des modules.",
                         ));
-                    }
-                }
-                Some("reload") => {
-                    // Recharge un module ou tous
-                    if let Some(registry) = &mut app.fun_registry {
-                        match args.get(1).copied() {
-                            Some(name) => match registry.reload_module(name) {
-                                Ok(()) => {
-                                    app.messages.push(ChatMessage::notice(format!(
-                                        "✅ Module '{}' rechargé",
-                                        name
-                                    )));
-                                }
-                                Err(e) => {
-                                    app.messages.push(ChatMessage::notice(format!(
-                                        "❌ Échec du rechargement de '{}': {}",
-                                        name, e
-                                    )));
-                                }
-                            },
-                            None => match registry.load_all() {
-                                Ok(()) => {
-                                    let count = registry.len();
-                                    app.messages.push(ChatMessage::notice(format!(
-                                        "✅ {} module(s) rechargé(s)",
-                                        count
-                                    )));
-                                }
-                                Err(e) => {
-                                    app.messages.push(ChatMessage::notice(format!(
-                                        "❌ Échec du rechargement: {}",
-                                        e
-                                    )));
-                                }
-                            },
-                        }
-                    }
-                }
-                Some("unload") => {
-                    if let Some(name) = args.get(1).copied() {
-                        if let Some(registry) = &mut app.fun_registry {
-                            match registry.unload_module(name) {
-                                Ok(()) => {
-                                    if app.active_fun_module.as_deref() == Some(name) {
-                                        app.active_fun_module = None;
-                                    }
-                                    app.messages.push(ChatMessage::notice(format!(
-                                        "✅ Module '{}' déchargé",
-                                        name
-                                    )));
-                                }
-                                Err(e) => {
-                                    app.messages.push(ChatMessage::notice(format!(
-                                        "❌ Échec du déchargement: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        }
                     } else {
-                        app.messages
-                            .push(ChatMessage::notice("Usage: /fun unload <nom>"));
-                    }
-                }
-                Some("dir") => {
-                    if let Some(registry) = &app.fun_registry {
-                        app.messages.push(ChatMessage::notice(format!(
-                            "Répertoire des modules: {}",
+                        let mut s = String::from("Modules fun dynamiques :\n\n");
+                        for meta in modules {
+                            s.push_str(&format!(
+                                "  {} v{} — {}\n    catégorie: {:?} | permissions: {:?}\n\n",
+                                meta.name,
+                                meta.version,
+                                meta.description,
+                                meta.category,
+                                meta.permissions
+                            ));
+                        }
+                        s.push_str(&format!(
+                            "Répertoire: {}\n\
+                                Commandes: /<module> pour activer, /fun reload pour recharger",
                             registry.modules_dir.display()
-                        )));
+                        ));
+                        app.messages.push(ChatMessage::notice(s));
                     }
-                }
-                Some(_) => {
+                } else {
                     app.messages.push(ChatMessage::notice(
-                        "Usage: /fun [list|reload [nom]|unload <nom>|dir]",
+                        "Registry de modules fun non initialisé.",
                     ));
                 }
             }
-        }
+            Some("reload") => {
+                if let Some(registry) = &mut app.fun_registry {
+                    match args.get(1).copied() {
+                        Some(name) => match registry.reload_module(name) {
+                            Ok(()) => {
+                                app.messages.push(ChatMessage::notice(format!(
+                                    "✅ Module '{}' rechargé",
+                                    name
+                                )));
+                            }
+                            Err(e) => {
+                                app.messages.push(ChatMessage::notice(format!(
+                                    "❌ Échec du rechargement de '{}': {}",
+                                    name, e
+                                )));
+                            }
+                        },
+                        None => match registry.load_all() {
+                            Ok(()) => {
+                                let count = registry.len();
+                                app.messages.push(ChatMessage::notice(format!(
+                                    "✅ {} module(s) rechargé(s)",
+                                    count
+                                )));
+                            }
+                            Err(e) => {
+                                app.messages.push(ChatMessage::notice(format!(
+                                    "❌ Échec du rechargement: {}",
+                                    e
+                                )));
+                            }
+                        },
+                    }
+                }
+            }
+            Some("unload") => {
+                if let Some(name) = args.get(1).copied() {
+                    if let Some(registry) = &mut app.fun_registry {
+                        match registry.unload_module(name) {
+                            Ok(()) => {
+                                if app.active_fun_module.as_deref() == Some(name) {
+                                    app.active_fun_module = None;
+                                }
+                                app.messages.push(ChatMessage::notice(format!(
+                                    "✅ Module '{}' déchargé",
+                                    name
+                                )));
+                            }
+                            Err(e) => {
+                                app.messages.push(ChatMessage::notice(format!(
+                                    "❌ Échec du déchargement: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    }
+                } else {
+                    app.messages
+                        .push(ChatMessage::notice("Usage: /fun unload <nom>"));
+                }
+            }
+            Some("dir") => {
+                if let Some(registry) = &app.fun_registry {
+                    app.messages.push(ChatMessage::notice(format!(
+                        "Répertoire des modules: {}",
+                        registry.modules_dir.display()
+                    )));
+                }
+            }
+            Some(_) => {
+                app.messages.push(ChatMessage::notice(
+                    "Usage: /fun [list|reload [nom]|unload <nom>|dir]",
+                ));
+            }
+        },
         "/zer0build" => {
             app.zer0build_overlay = !app.zer0build_overlay;
         }
@@ -1326,7 +1180,6 @@ fn handle_command(app: &mut App, text: &str, ui_tx: &UnboundedSender<UiEvent>) {
             }
         }
         "/provoke" => {
-            // 1er mot = rôle SEULEMENT s'il est connu ; sinon tout est la tâche (rôle auto).
             let joined = args.join(" ");
             let (role, task) = match args.first().copied() {
                 Some(r) if route::KNOWN_ROLES.contains(&r) && args.len() > 1 => {
@@ -1349,7 +1202,6 @@ fn handle_command(app: &mut App, text: &str, ui_tx: &UnboundedSender<UiEvent>) {
                      Une IA compétente ferait mieux. Fais le travail correctement : {task}"
                 );
                 let endpoints = route::chain_for_role(&app.settings(), &role);
-                // Respecte les toggles F3 (Read&Write) et F4 (Code-exec).
                 let tools: Vec<ToolSpec> = app
                     .all_tools
                     .iter()
@@ -1552,7 +1404,6 @@ fn handle_command(app: &mut App, text: &str, ui_tx: &UnboundedSender<UiEvent>) {
                 t.stop();
             }
             crate::sound::event(crate::sound::Event::Panel);
-            // Même panneau latéral que /radio et /bintime.
             if app.top.is_none() {
                 app.top = Some(crate::fun::top::Top::new());
             }
@@ -1571,7 +1422,6 @@ fn handle_command(app: &mut App, text: &str, ui_tx: &UnboundedSender<UiEvent>) {
                     return;
                 }
             };
-            // Couper : jouer AVANT d'enregistrer (sinon `event()` est déjà muet).
             if !wanted {
                 crate::sound::event(crate::sound::Event::ToggleOff);
             }
@@ -1704,7 +1554,6 @@ fn handle_command(app: &mut App, text: &str, ui_tx: &UnboundedSender<UiEvent>) {
             ));
         }
         other => {
-            // Vérifier si c'est un module fun dynamique
             let module_name = other.trim_start_matches('/');
             if let Some(registry) = &app.fun_registry {
                 if registry.contains(module_name) {
@@ -1725,7 +1574,6 @@ fn handle_command(app: &mut App, text: &str, ui_tx: &UnboundedSender<UiEvent>) {
 
 fn handle_provider(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     match args.first().copied() {
-        // Sélecteur (spécifique TUI : nécessite un état d'interface).
         None => {
             let gw = config::gateway_enabled();
             let items: Vec<picker::Item> = providers::all()
@@ -1755,18 +1603,14 @@ fn handle_provider(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent
             ));
         }
         Some(sub) => {
-            // Tout le reste est délégué au noyau : mêmes règles que le CLI.
             let res = match sub {
                 "list" => Ok(crate::commands::provider_list()),
                 "keys" => Ok(crate::commands::provider_keys()),
                 "add" => {
-                    // `/provider add` sans argument : overlay guidé.
                     if args.len() == 1 {
                         provider_add::start(app);
                         return;
                     }
-                    // /provider add <id> [<base_url>] [<nom>] <clé> [--gw|--local|--force]
-                    // Flagles --base-url/--name/--key lèvent l'ambiguïté positionnelle.
                     let mut route = crate::commands::GwRoute::Auto;
                     let mut force = false;
                     let mut base_url: Option<&str> = None;
@@ -1841,7 +1685,6 @@ fn handle_provider(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent
                     for line in lines {
                         app.messages.push(ChatMessage::notice(line));
                     }
-                    // La config a pu changer : on resynchronise l'état de session.
                     if matches!(sub, "add" | "add-custom" | "use" | "remove") {
                         app.reload_settings();
                         if sub == "add" || sub == "use" {
@@ -1854,7 +1697,6 @@ fn handle_provider(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent
         }
     }
 }
-/// Touches quand un sélecteur est ouvert.
 fn handle_picker_key(
     key: crossterm::event::KeyEvent,
     app: &mut App,
@@ -1892,9 +1734,6 @@ fn handle_picker_key(
             }
         }
         KeyCode::Char(c) => {
-            // Palette de commandes : l'espace VALIDE la frappe et ferme la
-            // palette. Sans ça, elle avalait la suite et `/whoami zero-vamp`
-            // (ou `/task add …`) était impossible à écrire.
             let is_command = app
                 .picker
                 .as_ref()
@@ -1914,8 +1753,6 @@ fn handle_picker_key(
         KeyCode::Enter => {
             let Some(p) = app.picker.take() else { return };
             let Some(item) = p.selected().cloned() else {
-                // Aucun résultat : on rend la frappe à la saisie au lieu de
-                // l'avaler (et de risquer d'exécuter le premier élément).
                 input_set(app, palette_text(&p.filter));
                 return;
             };
@@ -1928,7 +1765,6 @@ fn handle_picker_key(
             match p.kind {
                 picker::Kind::Model => {
                     if let Some(role) = p.target.clone() {
-                        // `/role set <rôle>` sans modèle : le menu fournit le modèle.
                         let route = format!("{}/{}", app.provider_id, item.id);
                         match crate::commands::role_set(&role, &route) {
                             Ok(lines) => {
@@ -1947,8 +1783,6 @@ fn handle_picker_key(
                 picker::Kind::Provider => set_provider(app, &item.id, ui_tx),
                 picker::Kind::Theme => apply_theme(app, &item.id),
                 picker::Kind::Command => {
-                    // Une commande finissant par un espace attend un argument :
-                    // on l'insère ; les autres s'exécutent.
                     if item.id.ends_with(' ') {
                         input_set(app, item.id.clone());
                     } else {
@@ -1961,9 +1795,6 @@ fn handle_picker_key(
     }
 }
 
-/// Lance l'animation « baleine deepseek » quand le modèle actif **devient** un
-/// deepseek. Jamais deux fois pour le même modèle, jamais au démarrage, et
-/// désactivable par `ZER0_NO_ANIM=1`.
 fn whale_on_model_change(app: &mut App, before: &str) {
     if before == app.model || !whale::wanted(&app.model) {
         return;
@@ -1974,7 +1805,6 @@ fn whale_on_model_change(app: &mut App, before: &str) {
     app.whale = Some(whale::Whale::new());
 }
 
-/// Applique un modèle (refuse les embedders pour le chat).
 fn set_model(app: &mut App, m: &str, ui_tx: &UnboundedSender<UiEvent>) {
     let local_mode = app.provider_id == "local";
     let before = app.model.clone();
@@ -1991,7 +1821,6 @@ fn set_model(app: &mut App, m: &str, ui_tx: &UnboundedSender<UiEvent>) {
     let _ = config::save_global(&g);
     app.model = m.to_string();
     if local_mode {
-        // Un serveur local ne charge qu'un modèle : il faut le redémarrer.
         let wanted = m.to_string();
         let ui = ui_tx.clone();
         tokio::spawn(async move {
@@ -2006,7 +1835,6 @@ fn set_model(app: &mut App, m: &str, ui_tx: &UnboundedSender<UiEvent>) {
         .push(ChatMessage::notice(format!("Modèle actif: {m}")));
 }
 
-/// Applique un provider (le transport passerelle/direct est recalculé).
 fn set_provider(app: &mut App, id: &str, ui_tx: &UnboundedSender<UiEvent>) {
     match providers::find(id) {
         Some(p) => {
@@ -2034,7 +1862,6 @@ fn set_provider(app: &mut App, id: &str, ui_tx: &UnboundedSender<UiEvent>) {
     }
 }
 
-/// `/update [check]` : met à jour le binaire depuis les Releases GitHub.
 fn cmd_update(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     let check = matches!(args.first().copied(), Some("check") | Some("--check"));
     app.messages
@@ -2049,12 +1876,6 @@ fn cmd_update(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     });
 }
 
-/// `/0do [args]` — lance le mod `mods/zer0do/zer0do` (appareils du réseau).
-///
-/// Le mod est un script **externe** : le noyau ne parle aucun protocole de
-/// téléviseur. Il est exécuté via le shell de la plateforme (comme `code_exec`),
-/// avec l'environnement nettoyé des secrets, et son action est journalisée dans
-/// l'audit — c'est le seul endroit où l'agent peut agir hors du dépôt.
 fn cmd_0do(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     let script = crate::mods::project_root().join("mods/zer0do/zer0do");
     if !script.is_file() {
@@ -2072,9 +1893,6 @@ fn cmd_0do(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     app.messages
         .push(ChatMessage::notice(format!("⏳ 0do {shown} …")));
 
-    // Le script est appelé via le shell de la plateforme (`bash` sous Unix), et
-    // ses arguments lui sont passés tels quels, sans passer par une chaîne
-    // interprétée : pas d'injection possible depuis un identifiant d'appareil.
     let mut line = String::from("'");
     line.push_str(&script.to_string_lossy().replace('\'', "'\\''"));
     line.push('\'');
@@ -2101,7 +1919,6 @@ fn cmd_0do(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
                 if text.is_empty() {
                     text = format!("(aucune sortie, code {:?})", out.status.code());
                 }
-                // Trace : l'action est relisible après coup (`zer0 audit`).
                 let first = text.lines().next().unwrap_or("").to_string();
                 crate::audit::record("0do", &audit_args, &first);
                 let _ = ui.send(UiEvent::Info(text));
@@ -2118,9 +1935,6 @@ fn cmd_0do(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     });
 }
 
-/// `/zer0push` : tests → push → pull request (`gh`).
-/// Le travail est long (cargo test) : il part dans une tâche, le rapport revient
-/// en `UiEvent::Info`. Aucune action destructive : jamais de `--force`.
 fn cmd_zer0push(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     let opts = match crate::zer0push::parse_args(args) {
         Ok(o) => o,
@@ -2155,8 +1969,6 @@ fn cmd_zer0push(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) 
     });
 }
 
-/// `/img <chemin>` : joint une image (PNG/JPEG/WebP/GIF) au **prochain** message.
-/// Nécessite un modèle multimodal (vision) ; avertit honnêtement sinon.
 fn handle_img(app: &mut App, args: &[&str]) {
     match args.first().copied() {
         None | Some("show") => match &app.pending_image_name {
@@ -2183,7 +1995,6 @@ fn handle_img(app: &mut App, args: &[&str]) {
             app.pending_image = Some(data_url);
             app.pending_image_name = Some(format!("{path} ({:.0} Kio)", size as f64 / 1024.0));
 
-            // Garde-fou : le modèle actif accepte-t-il les images ?
             let note = if app.vision_models.iter().any(|id| id == &app.model) {
                 format!("✓ {} accepte les images (catalogue)", app.model)
             } else if !app.vision_models.is_empty() {
@@ -2206,9 +2017,6 @@ fn handle_img(app: &mut App, args: &[&str]) {
     }
 }
 
-/// Ouvre la palette de commandes (filtrable) depuis l'arbre du menu cliquable.
-/// Texte à réinjecter dans la saisie quand on quitte la palette de commandes.
-/// (pur : testable sans interface)
 fn palette_text(filter: &str) -> String {
     let f = filter.trim();
     if f.is_empty() {
@@ -2235,7 +2043,6 @@ fn open_command_palette(app: &mut App) {
     ));
 }
 
-/// Construit les entrées du menu de thèmes (avec aperçus de couleurs).
 fn theme_items(active: theme::Theme) -> Vec<picker::Item> {
     let defaut = crate::commands::theme_default();
     theme::ALL
@@ -2265,7 +2072,6 @@ fn theme_items(active: theme::Theme) -> Vec<picker::Item> {
         .collect()
 }
 
-/// Aperçu sonore du picker : le son du thème survolé, sinon un tick.
 fn picker_sound(app: &App) {
     let Some(p) = app.picker.as_ref() else {
         return;
@@ -2280,7 +2086,6 @@ fn picker_sound(app: &App) {
     }
 }
 
-/// Ouvre le menu de sélection des thèmes de couleurs.
 fn open_theme_menu(app: &mut App) {
     let active = theme::active();
     let mut theme_picker = picker::Picker::new(
@@ -2294,22 +2099,14 @@ fn open_theme_menu(app: &mut App) {
     app.picker = Some(theme_picker);
 }
 
-/// Applique un thème immédiatement et le persiste dans la configuration.
-/// Ce que `/theme <args>` doit faire (pur : testable sans config).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeCmd {
-    /// Ouvrir le menu des thèmes.
     Menu,
-    /// Appliquer (et persister comme thème actif).
     Apply(String),
-    /// Appliquer **et** mémoriser comme défaut.
     SetDefault(String),
-    /// Revenir au thème par défaut.
     Reset,
 }
 
-/// `/theme` → menu · `/theme ghost` → appliquer · `/theme ghost default` →
-/// défaut · `/theme default` (ou `reset`) → revenir au défaut.
 pub fn parse_theme_cmd(args: &str) -> ThemeCmd {
     let mut it = args.split_whitespace();
     match (it.next(), it.next()) {
@@ -2320,11 +2117,9 @@ pub fn parse_theme_cmd(args: &str) -> ThemeCmd {
     }
 }
 
-/// Pousse les lignes d'un changement de thème (ou l'erreur, préfixée).
 fn push_lines(app: &mut App, res: anyhow::Result<Vec<String>>, prefix: &str) {
     match res {
         Ok(lines) => {
-            // Signature sonore du thème (si les sons sont activés).
             crate::sound::event(crate::sound::Event::Theme(theme::active().id.to_string()));
             for line in lines {
                 app.messages.push(ChatMessage::notice(line));
@@ -2336,11 +2131,6 @@ fn push_lines(app: &mut App, res: anyhow::Result<Vec<String>>, prefix: &str) {
     }
 }
 
-/// `/0cg` — watchlist crypto dans le panneau latéral (API publique, sans clé).
-///
-/// Sans argument : ouvrir/fermer le panneau. `add`/`rm` modifient la liste
-/// **persistée** (`config.toml`, `cg_coins`), dans l'ordre choisi par
-/// l'utilisateur — aucune liste par défaut n'est imposée.
 fn handle_cg(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     let sub = args.first().copied().unwrap_or("");
     let res: anyhow::Result<Vec<String>> = match sub {
@@ -2370,7 +2160,6 @@ fn handle_cg(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     };
     match res {
         Ok(lines) => {
-            // La liste a pu changer : le panneau vivant suit la config.
             let coins = crate::commands::cg_coins();
             match &mut app.cg {
                 Some(c) => {
@@ -2387,7 +2176,6 @@ fn handle_cg(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     }
 }
 
-/// Lance la requête si elle est due (intervalle + pas déjà en vol).
 fn tick_cg(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     let Some(cg) = &mut app.cg else {
         return;
@@ -2403,8 +2191,6 @@ fn tick_cg(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
         let ev = match crate::http_client::HTTP_CLIENT
             .get(&url)
             .header("accept", "application/json")
-            // Sans agent, l'API répond 403 (Cloudflare) : le panneau restait
-            // vide avec « HTTP 403 » pour seule explication.
             .header("user-agent", crate::fun::cg::USER_AGENT)
             .send()
             .await
@@ -2422,13 +2208,10 @@ fn tick_cg(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
 
 fn apply_theme(app: &mut App, name: &str) {
     push_lines(app, crate::commands::set_theme(name), "Thème non changé");
-    // Les lignes de conversation sont en cache avec leurs styles.
     app.chat_cache.clear();
     app.chat_cache_len = 0;
 }
 
-/// Récupère la liste des modèles du provider actif puis ouvre le sélecteur.
-/// `/free` : menu des modèles gratuits du provider (au lieu d'une liste texte).
 fn cmd_pick_free(ui_tx: &UnboundedSender<UiEvent>) {
     let settings = config::resolve();
     let Some(provider) = providers::find(&settings.provider_id) else {
@@ -2486,23 +2269,19 @@ fn handle_model(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) 
         Some(m) => Some(m),
     };
     match model {
-        Some(m) => {
-            // Même contrôle et même persistance que `zer0 model use <id>`.
-            match crate::commands::set_model(m) {
-                Ok(lines) => {
-                    let before = app.model.clone();
-                    app.model = m.to_string();
-                    whale_on_model_change(app, &before);
-                    probe_context(app, ui_tx);
-                    for line in lines {
-                        app.messages.push(ChatMessage::notice(line));
-                    }
+        Some(m) => match crate::commands::set_model(m) {
+            Ok(lines) => {
+                let before = app.model.clone();
+                app.model = m.to_string();
+                whale_on_model_change(app, &before);
+                probe_context(app, ui_tx);
+                for line in lines {
+                    app.messages.push(ChatMessage::notice(line));
                 }
-                Err(e) => app.messages.push(ChatMessage::notice(format!("❌ {e}"))),
             }
-        }
+            Err(e) => app.messages.push(ChatMessage::notice(format!("❌ {e}"))),
+        },
         None => {
-            // Sans identifiant : menu sélectionnable (plus de saisie à l'aveugle).
             cmd_pick_model(app, ui_tx, None);
             app.messages
                 .push(ChatMessage::notice("Choisis un modèle dans la liste."));
@@ -2549,8 +2328,6 @@ fn handle_role(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
                     "usage: /role set <role>  (sans modèle : un menu s'ouvre)",
                 ));
             } else if route_s.is_empty() {
-                // Menu sélectionnable : plus besoin de connaître la syntaxe
-                // `provider/model` pour associer un modèle à un rôle.
                 cmd_pick_model(app, ui_tx, Some(role.to_string()));
                 app.messages.push(ChatMessage::notice(format!(
                     "Choisis le modèle du rôle `{role}`."
@@ -2595,7 +2372,6 @@ fn handle_role(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
                     .push(ChatMessage::notice(format!("Erreur: {e}"))),
             }
         }
-        // Forcer un rôle est un état de session (pas de config) : TUI seulement.
         Some("use") | Some("force") => {
             let role = args.get(1).copied().unwrap_or("");
             if route::KNOWN_ROLES.contains(&role) {
@@ -2660,7 +2436,6 @@ fn cmd_compact(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
 }
 
 fn handle_task(app: &mut App, args: &[&str]) {
-    // Même parseur et même exécution que `zer0 task …`.
     let cmd = match crate::commands::parse_task(args) {
         Ok(c) => c,
         Err(e) => {
@@ -2668,8 +2443,6 @@ fn handle_task(app: &mut App, args: &[&str]) {
             return;
         }
     };
-    // Liste : vue animée (le marqueur « en cours » cycle). Les tâches sont
-    // chargées une fois et re-rendues à chaque frame — pas d'I/O par tick.
     if matches!(cmd, crate::commands::TaskCmd::List) {
         let tasks = crate::tasks::load();
         let text = crate::tasks::format_tasks(&tasks, Some(0));
@@ -2677,7 +2450,6 @@ fn handle_task(app: &mut App, args: &[&str]) {
         app.task_view = Some((app.messages.len() - 1, tasks));
         return;
     }
-    // Toute autre opération invalide la vue animée (statuts changés).
     app.task_view = None;
     match crate::commands::task(cmd) {
         Ok(lines) => {
@@ -2784,7 +2556,6 @@ fn cmd_work(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
         return;
     };
     let _ = crate::tasks::set_status(&task.id, crate::tasks::Status::Claimed);
-    // Rôle de la tâche ; sinon on l'auto-détecte depuis le texte (comme un message).
     let role = task
         .role
         .clone()
@@ -2842,7 +2613,6 @@ fn cmd_search(args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     let q = args.join(" ");
     let ui = ui_tx.clone();
     tokio::spawn(async move {
-        // Même implémentation que `zer0 search …`.
         let msg = match crate::commands::search(&q, 5).await {
             Ok(lines) => lines.join("\n"),
             Err(e) => format!("Erreur recherche : {e}"),
@@ -2859,7 +2629,6 @@ fn handle_context(app: &mut App) {
         .map(|c| c.chars().count())
         .sum();
     let tokens = chars / 4;
-    // Même règle que `start_turn` : définition unique dans `compact::budget_for`.
     let budget = crate::agent::compact::budget_for(app.context_window);
     let pct = if app.context_window > 0 {
         (tokens as f64 / app.context_window as f64 * 100.0).round() as u64
@@ -2889,7 +2658,6 @@ fn handle_context(app: &mut App) {
 
 fn handle_whoami(app: &mut App, args: &[&str]) {
     match args.first().copied() {
-        // L'activation d'une persona est un état de session : TUI seulement.
         None | Some("list") => {
             let cur = app
                 .persona
@@ -2926,7 +2694,6 @@ fn handle_whoami(app: &mut App, args: &[&str]) {
     }
 }
 fn handle_vault(app: &mut App, args: &[&str]) {
-    // `setup`/`unlock`/`reset` demandent une passphrase : CLI uniquement.
     let lines = match args.first().copied() {
         None | Some("status") => {
             let mut l = crate::commands::vault_status();
@@ -2940,7 +2707,6 @@ fn handle_vault(app: &mut App, args: &[&str]) {
     app.messages.push(ChatMessage::notice(lines.join("\n")));
 }
 fn handle_pdf(app: &mut App, args: &[&str]) {
-    // Même parseur que `zer0 pdf …`.
     match crate::commands::parse_pdf_args(args).and_then(crate::commands::pdf) {
         Ok(lines) => app.messages.push(ChatMessage::notice(lines.join("\n"))),
         Err(e) => app.messages.push(ChatMessage::notice(format!("{e}"))),
@@ -2988,7 +2754,6 @@ fn cmd_jev(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
 pub fn cmd_0box(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     let mut args_iter = args.iter().peekable();
 
-    // Handle subcommands
     if let Some(first) = args_iter.peek() {
         match **first {
             "fallback" => {
@@ -3016,8 +2781,6 @@ pub fn cmd_0box(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) 
         return;
     }
 
-    // Parse optional --perspectives flag
-    // Default order: code → reasoning → main (main always last for synthesis+execution)
     let mut perspectives: Vec<String> = vec![
         "code".to_string(),
         "reasoning".to_string(),
@@ -3040,7 +2803,6 @@ pub fn cmd_0box(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) 
     }
     let topic = topic_words.join(" ");
 
-    // Launch sequential debate as a background task
     let app_settings = app.settings();
     let system = app.system.clone();
     let options = ChatOptions {
@@ -3063,8 +2825,6 @@ pub fn cmd_0box(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) 
         topic,
         perspectives.join(", ")
     )));
-    // B5 : sans `streaming = true`, `/stop` répondait « Rien à interrompre. »
-    // alors qu'un débat de plusieurs minutes tournait.
     crate::cancel::clear();
     app.streaming = true;
     app.streaming_text.clear();
@@ -3088,8 +2848,6 @@ pub fn cmd_0box(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) 
     });
 }
 
-/// Contexte d'un débat 0box (regroupé : la fonction principale dépassait la
-/// limite d'arguments de clippy, et 9 paramètres ne se lisent pas).
 pub struct DebateSetup {
     pub settings: crate::config::Settings,
     pub system: String,
@@ -3100,7 +2858,6 @@ pub struct DebateSetup {
     pub ui: UnboundedSender<UiEvent>,
 }
 
-/// Tour de débat : qui parle, à quoi, vers quels endpoints.
 struct DebateTurn<'a> {
     role: &'a str,
     role_label: &'a str,
@@ -3108,9 +2865,6 @@ struct DebateTurn<'a> {
     endpoints: &'a [crate::route::Endpoint],
 }
 
-/// Lance un vrai débat séquentiel : chaque modèle reçoit la conversation complète
-/// et répond à son tour. Le dernier (MAIN) synthétise et peut exécuter.
-/// Publique : également appelée par le CLI headless (`zer0 0box <sujet>`).
 pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: DebateSetup) {
     let DebateSetup {
         settings: app_settings,
@@ -3121,18 +2875,12 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
         all_tools,
         ui,
     } = setup;
-    // Le drapeau est préparé par l'appelant de premier niveau ; un débat
-    // imbriqué ne doit jamais effacer un arrêt demandé au tour parent.
-    // Build tools available (respect F3/F4)
     let tools: Vec<crate::tools::ToolSpec> = all_tools
         .iter()
         .filter(|t| (t.name != "text_editor" || read_write) && (t.name != "code_exec" || code_exec))
         .cloned()
         .collect();
 
-    // Un débat/une question ne doit PAS ouvrir les outils d'écriture : sinon
-    // MAIN crée des tâches et des fichiers pour un test, puis rend une réponse
-    // vide (constaté). Seule une demande explicite de livrable les ouvre.
     let actionable = crate::debate::topic_wants_actions(&topic);
     const WRITE_TOOLS: [&str; 5] = [
         "task_add",
@@ -3151,17 +2899,14 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
             .collect()
     };
 
-    // Ensure MAIN is always last for synthesis + execution
     let mut debate_perspectives = perspectives.clone();
     if let Some(pos) = debate_perspectives.iter().position(|r| r == "main") {
         let main_role = debate_perspectives.remove(pos);
         debate_perspectives.push(main_role);
     } else {
-        // If no main role specified, add it at the end
         debate_perspectives.push("main".to_string());
     }
 
-    // Debug: log the actual perspectives order being used
     let _ = ui.send(UiEvent::Info(format!(
         "[0box] Perspectives: {} (F3={} F4={})",
         debate_perspectives.join(" -> "),
@@ -3169,16 +2914,12 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
         if code_exec { "ON" } else { "OFF" }
     )));
 
-    // Conversation partagée entre tous les participants
     let mut conversation: Vec<ChatMessage> = Vec::new();
 
-    // Prompt initial système pour le débat
     let mut debate_system = format!(
         "{}\n\n## RÈGLES DU DÉBAT 0BOX\n\nTu participes à un débat structuré entre plusieurs perspectives IA.\nChaque participant parle À SON TOUR, reçoit l'historique complet, et doit :\n1. RÉPONDRE aux arguments précédents (accord/désaccord/nuance)\n2. APPORTER sa perspective unique\n3. UTILISER les outils si nécessaire (web_search, knowledge_search, etc.)\n4. RESTER CONSTRUCTIF — l'objectif est une solution concrète finale.\n\nLe DERNIER participant (MAIN) doit SYNTHÉTISER et PROPOSER UN PLAN D'ACTION EXÉCUTABLE.\nSi des outils sont nécessaires pour valider (code, fichiers, recherche), UTILISE-LES.",
         system
     );
-    // Liste explicite des outils : ce modèle ignore souvent le paramètre `tools` de l'API,
-    // il faut les lui nommer dans le prompt (même pattern que start_turn).
     if !tools.is_empty() {
         debate_system.push_str(
             "\n\n## Outils disponibles (utilise-les pour AGIR — ne dis jamais « je ne peux pas exécuter » quand un outil le permet)\n",
@@ -3188,8 +2929,6 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
         }
     }
 
-    // MAIN : prompt distinct. La synthèse est le livrable ; les outils
-    // d'écriture ne sont ouverts que si le sujet le demande explicitement.
     let mut main_system = format!(
         "{}\n\n## RÈGLES DU DÉBAT 0BOX — MAIN\n\
          Tu es MAIN, dernier tour du débat. Ton livrable principal est une synthèse en texte : \
@@ -3219,13 +2958,10 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
         main_system.push_str("\nAucun outil n'est disponible pour ce tour : réponds en texte.\n");
     }
 
-    // Tour 1 : Premier participant (pas d'historique de débat)
     let total_turns = debate_perspectives.len();
     let mut done_turns = 0usize;
     let mut cancelled = false;
     for (turn_idx, role) in debate_perspectives.iter().enumerate() {
-        // B5 : sans ce test, un débat de plusieurs minutes ne pouvait pas être
-        // arrêté — `/stop` posait le drapeau, personne ne le lisait.
         if crate::cancel::is_cancelled() {
             cancelled = true;
             break;
@@ -3241,7 +2977,6 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
             role
         };
 
-        // Build prompt for this turn
         let prompt = if turn_idx == 0 {
             format!(
                 "=== DÉBAT 0BOX — TOUR 1/{} ===\nSUJET : {}\nTA PERSPECTIVE : {}\n\nTu OUVRES le débat. Donne ton analyse initiale, tes arguments clés, et tes questions aux autres perspectives.\nSois concret, structuré, et utilise les outils si tu as besoin de données.",
@@ -3250,7 +2985,6 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
                 role
             )
         } else if is_last {
-            // MAIN : la synthèse d'abord. Actions seulement si le sujet le demande.
             let history = format_conversation(&conversation);
             let instruction = if actionable {
                 "Le sujet demande un livrable : 1) écris la synthèse (décision, raisons, étapes), \
@@ -3271,7 +3005,6 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
                 instruction
             )
         } else {
-            // Participants intermédiaires : réagissent au débat
             let history = format_conversation(&conversation);
             format!(
                 "=== DÉBAT 0BOX — TOUR {}/{} ===\nSUJET : {}\nTA PERSPECTIVE : {}\nHISTORIQUE DU DÉBAT :\n{}\n\nRÉPONDS MAINTENANT :\n- Quels arguments précèdents VALIDES/INVALIDES ?\n- Quelle perspective UNIQUE apportes-tu ?\n- Quelles QUESTIONS aux autres ?\n- Utilise les outils si tu as besoin de preuves/données.",
@@ -3283,10 +3016,8 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
             )
         };
 
-        // Endpoint pour ce rôle
         let endpoints = crate::route::chain_for_0box_role(&app_settings, role);
 
-        // Annonce du tour
         let _ = ui.send(UiEvent::Info(format!(
             "🎭 [0box:{}] Tour {}/{} — parole à {}",
             role,
@@ -3295,7 +3026,6 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
             role_label
         )));
 
-        // Exécute le tour avec validation et retry si échec
         let (turn_system, turn_tools): (&str, &[crate::tools::ToolSpec]) = if is_last {
             (&main_system, &main_tools)
         } else {
@@ -3312,35 +3042,27 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
             turn_tools,
             &options,
             &ui,
-            3, // max retries per turn
+            3,
         )
         .await;
 
-        // Un tour interrompu n'est PAS une réponse de la perspective : ne pas
-        // l'ajouter à la conversation ni l'afficher comme un « 📝 [code]: ».
         if crate::cancel::is_cancelled() {
             cancelled = true;
             break;
         }
 
-        // Ajoute à la conversation partagée
         conversation.push(ChatMessage::assistant(
             format!("[{}]: {}", speaker, response),
             vec![],
         ));
 
-        // Affiche dans l'UI
         let _ = ui.send(UiEvent::Info(format!("📝 [{}]:\n{}", speaker, response)));
 
         done_turns += 1;
 
-        // Petite pause entre les tours.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
-    // Fin du débat — le message doit dire la VÉRITÉ : un débat interrompu au
-    // tour 1/3 n'a pas produit de synthèse, et l'annoncer « terminé » était un
-    // mensonge (B5).
     let _ = ui.send(UiEvent::Info(debate_end_message(
         cancelled,
         done_turns,
@@ -3349,10 +3071,6 @@ pub async fn run_0box_debate(topic: String, perspectives: Vec<String>, setup: De
     let _ = ui.send(UiEvent::DebateEnd { cancelled });
 }
 
-/// Message de fin de débat 0box, honnête sur l'interruption.
-///
-/// `done_turns` = nombre de tours réellement terminés, `total_turns` = nombre
-/// de perspectives prévues. Extrait en fonction pure pour être testable.
 fn debate_end_message(cancelled: bool, done_turns: usize, total_turns: usize) -> String {
     if cancelled {
         format!(
@@ -3365,8 +3083,6 @@ fn debate_end_message(cancelled: bool, done_turns: usize, total_turns: usize) ->
     }
 }
 
-/// Exécute un tour du débat 0box avec retry automatique et validation de la réponse.
-/// Retourne (speaker, response) garanti valide (non vide, non erreur).
 async fn run_0box_turn_with_retry(
     turn: DebateTurn<'_>,
     debate_system: &str,
@@ -3384,7 +3100,6 @@ async fn run_0box_turn_with_retry(
     let mut last_error = String::new();
 
     for attempt in 0..=max_retries {
-        // B5 : ne pas relancer un tour complet (plusieurs minutes) après `/stop`.
         if crate::cancel::is_cancelled() {
             return (role.to_string(), "⏹ interrompu par /stop".to_string());
         }
@@ -3395,11 +3110,9 @@ async fn run_0box_turn_with_retry(
             )));
         }
 
-        // Channel pour événements du sous-agent
         let (evt_tx, mut evt_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::agent::subagent::SubAgentEvent>();
 
-        // Lance le sous-agent
         let system_clone = debate_system.to_string();
         let tools_clone = tools.to_vec();
         let options_clone = options.clone();
@@ -3407,17 +3120,10 @@ async fn run_0box_turn_with_retry(
         let prompt_clone = prompt.to_string();
         let role_owned = role.to_string();
 
-        // Actions du tour (accumulées pour l'historique du débat : sans ça, les
-        // perspectives suivantes ne voient NI les tâches créées NI les fichiers
-        // écrits — MAIN recréait en double des tâches déjà posées par « code »).
         let actions: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let subagent_handle = tokio::spawn(async move {
-            // Budget élargi pour les tours de débat : MAIN doit vérifier + créer +
-            // marquer un plan multi-étapes — le budget par défaut (8/24) ne laisse
-            // même pas place aux `task_update` après vérification (constat run 3).
-            // Toujours borné : jamais illimité (principe d'endiguement).
             let res = crate::agent::subagent::run_subagent_budgeted(
                 endpoints_clone,
                 system_clone,
@@ -3432,7 +3138,6 @@ async fn run_0box_turn_with_retry(
             (role_owned, res)
         });
 
-        // Forward événements en temps réel
         let ui_evt = ui.clone();
         let role_label_owned = role_label.to_string();
         let acts_fwd = actions.clone();
@@ -3446,8 +3151,6 @@ async fn run_0box_turn_with_retry(
                         )));
                     }
                     crate::agent::subagent::SubAgentEvent::ToolCall { name, args } => {
-                        // Résumé compact (jamais le contenu brut tronqué à 100 chars,
-                        // qui donnait l'impression d'un flux coupé en plein file_text).
                         let short = summarize_tool_call(&name, &args);
                         if let Ok(mut a) = acts_fwd.lock() {
                             a.push(format!("{} {}", name, short));
@@ -3481,19 +3184,15 @@ async fn run_0box_turn_with_retry(
             }
         });
 
-        // Attend la fin du tour ET le drainage des événements
         let (speaker, response) = match subagent_handle.await {
             Ok((s, r)) => (s, r),
             Err(e) => {
                 last_error = format!("Join error: {e}");
-                continue; // retry
+                continue;
             }
         };
         let _ = forwarder.await;
 
-        // Réponse enrichie des actions du tour — les perspectives suivantes (et MAIN
-        // en particulier) doivent voir les tâches créées et fichiers écrits, sinon
-        // elles recréent en double ce qui existe déjà (constat runs 1–2).
         let mut full = response.clone();
         let n_actions = actions.lock().map(|a| a.len()).unwrap_or(0);
         if n_actions > 0 {
@@ -3512,7 +3211,6 @@ async fn run_0box_turn_with_retry(
             }
         }
 
-        // VALIDATION — sur la réponse ORIGINALE (les actions comptent comme travail).
         let response_trimmed = response.trim();
         if response_trimmed.is_empty() && n_actions == 0 {
             last_error = "Réponse vide".to_string();
@@ -3523,9 +3221,6 @@ async fn run_0box_turn_with_retry(
             continue;
         }
         if response_trimmed.starts_with("⚠") || response_trimmed.starts_with("Erreur") {
-            // Arrêt d'endiguement (boucle détectée, budget dépassé) : ce n'est PAS un
-            // échec modèle — le travail accompli est réel. Le retry redémarrerait le
-            // tour ENTIER pour rien (15 min perdues, run 4). On garde le tour tel quel.
             if response_trimmed.contains("boucle détectée")
                 || response_trimmed.contains("budget d'appels d'outils dépassé")
             {
@@ -3551,11 +3246,9 @@ async fn run_0box_turn_with_retry(
             continue;
         }
 
-        // Succès : réponse valide
         return (speaker, full);
     }
 
-    // Tous les retries échoués
     let error_msg = format!(
         "[{}]: ÉCHEC après {} tentatives — {}. Le débat continue avec ce constat.",
         role,
@@ -3574,7 +3267,6 @@ fn format_conversation(conversation: &[ChatMessage]) -> String {
         .iter()
         .map(|m| {
             if let Some(content) = &m.content {
-                // Extrait le speaker si format [speaker]: content
                 if let Some(rest) = content.strip_prefix('[') {
                     if let Some(end) = rest.find(']') {
                         let speaker = &rest[..end];
@@ -3693,9 +3385,7 @@ fn show_0box_help(app: &mut App) {
     ));
 }
 
-/// `/apis [besoin]` : catalogue d'APIs publiques (source community, datée).
 fn handle_apis(app: &mut App, args: &[&str]) {
-    // `/apis <besoin> [keyless]` ou `/apis` (stats).
     let mut words: Vec<&str> = args.to_vec();
     let keyless = words.iter().any(|w| w.eq_ignore_ascii_case("keyless"));
     words.retain(|w| !w.eq_ignore_ascii_case("keyless"));
@@ -3730,7 +3420,6 @@ fn handle_kb(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
             });
         }
         Some("ingest") => {
-            // `--embed` est reconnu ici aussi (le CLI l'avait, la TUI l'ignorait).
             let embed = args.contains(&"--embed");
             let dir = args
                 .get(1)
@@ -3738,12 +3427,8 @@ fn handle_kb(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
                 .map(std::path::PathBuf::from);
             let ui = ui_tx.clone();
             tokio::spawn(async move {
-                // Un message par palier de 20 % : informer sans inonder le fil
-                // (une ingestion de 250 chunks dure des dizaines de minutes).
                 let notify = ui.clone();
                 let show = move |p: crate::knowledge::IngestProgress| {
-                    // Un message par palier de 20 % (l'appelant reçoit chaque
-                    // chunk : c'est ici qu'on choisit de ne pas inonder le fil).
                     if p.pct().is_multiple_of(20) {
                         let _ = notify.send(UiEvent::Info(format!(
                             "⏳ {}",
@@ -3763,7 +3448,6 @@ fn handle_kb(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
             app.messages
                 .push(ChatMessage::notice(crate::commands::kb_log(n).join("\n")));
         }
-        // État de session (pas de config) : TUI uniquement.
         Some("auto") => {
             app.kb_auto = !app.kb_auto;
             let state = if app.kb_auto { "ON" } else { "OFF" };
@@ -3797,8 +3481,6 @@ fn handle_kb(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
         )),
     }
 }
-/// `/embeddings [show|set <provider> <model>|unset]` — embedder de la mémoire.
-/// Un modèle d'embedding ne sert QUE pour `/embeddings` (pas de chat).
 fn handle_embeddings(app: &mut App, args: &[&str]) {
     let res = match args.first().copied() {
         None | Some("show") => Ok(crate::commands::embeddings_show()),
@@ -3819,7 +3501,6 @@ fn handle_embeddings(app: &mut App, args: &[&str]) {
     }
 }
 fn handle_memory(app: &mut App, args: &[&str]) {
-    // Même source que `zer0 memory list|stats`.
     let lines = match args.first().copied() {
         Some("stats") => crate::commands::memory_stats(),
         Some("list") | None => crate::commands::memory_list(20),
@@ -3841,7 +3522,6 @@ fn cmd_remember(args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     let text = args.join(" ");
     let ui = ui_tx.clone();
     tokio::spawn(async move {
-        // Même chemin que `zer0 memory save`.
         let msg = match crate::commands::memory_save(&text, None).await {
             Ok(lines) => lines.join("\n"),
             Err(e) => format!("Erreur mémoire: {e}"),
@@ -3853,7 +3533,6 @@ fn cmd_recall(args: &[&str], ui_tx: &UnboundedSender<UiEvent>) {
     let q = args.join(" ");
     let ui = ui_tx.clone();
     tokio::spawn(async move {
-        // Même chemin que `zer0 memory search`.
         let msg = match crate::commands::memory_search(&q, 5).await {
             Ok(lines) => lines.join("\n"),
             Err(e) => format!("Erreur mémoire: {e}"),
@@ -3945,12 +3624,9 @@ fn handle_route(app: &mut App, args: &[&str], ui_tx: &UnboundedSender<UiEvent>) 
         )),
     }
 }
-/// `/quota` : usage observé + solde de la clé quand le provider le publie
-/// (OpenRouter `/auth/key` ; Cline ne publie rien). Le fetch live est async.
 fn cmd_quota(ui_tx: &UnboundedSender<UiEvent>, provider: Option<String>) {
     let ui = ui_tx.clone();
     tokio::spawn(async move {
-        // Même rapport que `zer0 quota` (y compris l'absence de solde publié).
         let msg = match crate::commands::quota_report(provider.as_deref()).await {
             Ok(lines) => lines.join("\n"),
             Err(e) => format!("Erreur quota : {e}"),
@@ -3958,23 +3634,17 @@ fn cmd_quota(ui_tx: &UnboundedSender<UiEvent>, provider: Option<String>) {
         let _ = ui.send(UiEvent::Info(msg));
     });
 }
-/// Clic sur 👍 / 👎 : un upvote = une star GitHub (via l'API si un jeton est
-/// présent, sinon la page du dépôt s'ouvre dans le navigateur).
 fn vote_click(ui_tx: &UnboundedSender<UiEvent>, action: crate::vote::Action) {
     let ui = ui_tx.clone();
     tokio::spawn(async move {
         let msg = crate::vote::act(action).await;
         let _ = ui.send(UiEvent::Info(msg));
-        // Le navigateur a pu rendre le mode « souris » à la console : on le
-        // réarme, sinon plus aucun clic n'atteindrait le TUI (menu compris).
         crate::platform::restore_mouse_capture();
-        // Rafraîchit le compteur et l'état du compte après le vote.
         let (stars, starred) = crate::vote::state().await;
         let _ = ui.send(UiEvent::VoteState { stars, starred });
     });
 }
 
-/// `/vote` : état des lieux (compteur, star du compte, URL).
 fn cmd_vote(ui_tx: &UnboundedSender<UiEvent>) {
     let ui = ui_tx.clone();
     tokio::spawn(async move {
@@ -3984,19 +3654,9 @@ fn cmd_vote(ui_tx: &UnboundedSender<UiEvent>) {
     });
 }
 
-/// `/vote login` : connexion GitHub par device flow (une seule fois).
-///
-/// Le jeton est rangé **chiffré** dans le coffre. Deux précautions :
-/// - la passphrase du coffre doit être connue (`ZER0_VAULT_PASSPHRASE`) : on ne
-///   peut pas lire le clavier depuis la TUI (mode raw) ;
-/// - si l'écriture échoue, le jeton **n'est pas perdu** : on le propose dans le
-///   presse-papier et on dit comment le stocker, plutôt que de demander à
-///   l'utilisateur de recommencer la connexion.
 fn cmd_vote_login(ui_tx: &UnboundedSender<UiEvent>) {
     let ui = ui_tx.clone();
     tokio::spawn(async move {
-        // Sans passphrase connue, on ne peut pas ecrire le coffre chiffre
-        // (et on ne peut pas lire le clavier depuis la TUI : mode raw).
         let pass_env = std::env::var("ZER0_VAULT_PASSPHRASE").unwrap_or_default();
         if pass_env.is_empty() && !crate::vault::is_unlocked() {
             let _ = ui.send(UiEvent::Info(format!(
@@ -4016,9 +3676,6 @@ fn cmd_vote_login(ui_tx: &UnboundedSender<UiEvent>) {
         match res {
             Ok(creds) => match crate::vault::put("github", &creds.access) {
                 Ok(()) => {
-                    // App à jetons expirables : on conserve aussi le refresh
-                    // token (chiffré) → le vote reste automatique après 8 h.
-                    // **Opt-in** : sans refresh token, rien ne change.
                     let mut msg = String::from(
                         "Jeton GitHub enregistre (chiffre dans le coffre) : le vote est desormais automatique (pouce haut = une star).",
                     );
@@ -4030,7 +3687,6 @@ fn cmd_vote_login(ui_tx: &UnboundedSender<UiEvent>) {
                     let _ = ui.send(UiEvent::Info(msg));
                 }
                 Err(e) => {
-                    // Le jeton est bon mais non stocke : on ne le perd pas.
                     crate::clipboard::copy(&creds.access);
                     let _ = ui.send(UiEvent::Info(format!(
                         "Jeton obtenu mais non stocke dans le coffre : {e}\n\nIl est copie dans le presse-papier : colle-le dans\n\
@@ -4068,7 +3724,6 @@ fn cmd_list_models(app: &App, ui_tx: &UnboundedSender<UiEvent>, free_only: bool)
                     provider.name
                 ));
                 for m in list.iter().take(80) {
-                    // Usage observé cette session (429, appels ok) — rien d'observé ⇒ rien d'affiché.
                     let badge = crate::quota::badge(&format!("{}/{}", provider.id, m.id))
                         .unwrap_or_default();
                     s.push_str(&format!(
@@ -4102,7 +3757,6 @@ fn cmd_select(problem: &str, ui_tx: &UnboundedSender<UiEvent>) {
     let problem = problem.to_string();
     let ui = ui_tx.clone();
     tokio::spawn(async move {
-        // Même implémentation que `zer0 select …` (top 8, même avertissement).
         let msg = match crate::commands::select_models(&problem, 8).await {
             Ok(lines) => lines.join("\n"),
             Err(e) => format!("Erreur: {e}"),
@@ -4110,7 +3764,6 @@ fn cmd_select(problem: &str, ui_tx: &UnboundedSender<UiEvent>) {
         let _ = ui.send(UiEvent::Info(msg));
     });
 }
-/// Liste les fichiers de conversation (active + archives), plus récents d'abord.
 fn scan_chats() -> Vec<std::path::PathBuf> {
     let dir = config::data_dir();
     let mut files = Vec::new();
@@ -4133,7 +3786,6 @@ fn scan_chats() -> Vec<std::path::PathBuf> {
     files
 }
 
-/// Touches du pop-up Chats. Retourne `true` s'il faut le fermer.
 fn handle_chats_key(app: &mut App, code: KeyCode) -> bool {
     let len = app.chats_popup.as_ref().map(|(f, _)| f.len()).unwrap_or(0);
     match code {
@@ -4164,7 +3816,6 @@ fn handle_chats_key(app: &mut App, code: KeyCode) -> bool {
     }
 }
 
-/// Charge une session depuis un fichier et la rend active (archive l'actuelle).
 fn load_chat_session(app: &mut App, path: &std::path::Path) {
     let active = crate::convo::path();
     if path != active.as_path() {
@@ -4181,8 +3832,6 @@ fn load_chat_session(app: &mut App, path: &std::path::Path) {
         }
         let _ = std::fs::copy(path, &active);
     }
-    // Réparation : une session archivée peut avoir été coupée au milieu d'un
-    // échange d'outils ; la renvoyer telle quelle produit un 400 chez le provider.
     let loaded = crate::convo::repair(crate::convo::load_from_path(&active, 0));
     let conv: Vec<ChatMessage> = loaded
         .iter()
@@ -4204,39 +3853,24 @@ fn load_chat_session(app: &mut App, path: &std::path::Path) {
 }
 
 fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
-    // ========== FILTRE RELEASE (Windows/ConPTY : chaque touche = Press + Release) ==========
-    // Sans ce filtre, le sélecteur/palette traite le Release comme une 2e frappe
-    // (le filtre Press du dispatch principal ne couvre pas ce chemin) → « 0 » devient « 00 ».
     if let Event::Key(k) = &ev {
         if k.kind == KeyEventKind::Release {
             return;
         }
     }
-    // ========================================================================================
 
-    // ========== DÉDUPLICATION GLOBALE (doublons de Press, ex. ConPTY) ==========
     if let Event::Key(k) = &ev {
-        // On ne déduplique que les Press (Repeat = auto-repeat légitime)
         if k.kind == KeyEventKind::Press {
             let now = std::time::Instant::now();
             let code = k.code;
             let mods = k.modifiers;
 
-            // Doublon = même touche, mêmes modifs, < 50 ms. **Windows
-            // uniquement** : c'est ConPTY qui rejoue des `Press`. Ailleurs,
-            // deux frappes légitimes de la même touche arrivent souvent en
-            // moins de 50 ms (frappe rapide, `tmux send-keys`, script, presse-
-            // papier) et étaient perdues — « deepseek » devenait « depsek »,
-            // « allé » devenait « alé ».
             if cfg!(windows) {
                 if let Some((last_code, last_mods, last_time)) = app.last_key_event {
                     if last_code == code
                         && last_mods == mods
                         && now.duration_since(last_time).as_millis() < 50
                     {
-                        // Un doublon ConPTY ne change pas l'état de l'interface.
-                        // Deux Échap successifs, eux, peuvent fermer deux vues
-                        // différentes : il faut laisser passer le second.
                         let closes_view = code == KeyCode::Esc
                             && (app.picker.is_some()
                                 || app.wizard.is_some()
@@ -4244,7 +3878,7 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                                 || app.task_view.is_some()
                                 || app.side_mode.is_some());
                         if !closes_view {
-                            return; // Ignorer le doublon
+                            return;
                         }
                     }
                 }
@@ -4252,10 +3886,7 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
             app.last_key_event = Some((code, mods, now));
         }
     }
-    // ================================================================================
 
-    // Assistant ouvert : il capte tout (clavier + collage), y compris le collage
-    // des clés API (le presse-papier est indispensable pour une clé).
     if app.wizard.is_some() {
         match ev {
             Event::Key(k) => wizard::handle_key(k, app, ui_tx),
@@ -4273,7 +3904,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
         return;
     }
 
-    // Overlay `/provider add` : capte tout (clavier + collage de la clé).
     if app.provider_add.is_some() {
         match ev {
             Event::Key(k) => provider_add::handle_key(k, app, ui_tx),
@@ -4291,19 +3921,16 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
         return;
     }
 
-    // Sélecteur ouvert : il capte tout le clavier.
     if let Event::Key(key) = ev {
         if app.picker.is_some() {
             handle_picker_key(key, app, ui_tx);
             return;
         }
     }
-    // Collage (bracketed paste) : insérer tel quel, sans déclencher d'envoi.
     if let Event::Paste(s) = &ev {
         input_insert_str(app, s);
         return;
     }
-    // Clics souris sur les boutons 0chan / micro.
     if let Event::Mouse(me) = ev {
         use crossterm::event::{MouseButton, MouseEventKind};
         let inside = |r: Option<Rect>| {
@@ -4317,8 +3944,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
         };
         match me.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                // Les boutons (pouces, 0chan, micro) passent avant la sélection
-                // de texte : un clic dessus ne doit pas « dessiner » une zone.
                 if inside(app.btn_vote_up) {
                     vote_click(ui_tx, crate::vote::Action::Up);
                 } else if inside(app.btn_vote_down) {
@@ -4384,7 +4009,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                     app.auto_scroll = auto;
                 }
             }
-            // Clic droit sur une sortie d'outil : déplier/replier CE bloc.
             MouseEventKind::Down(MouseButton::Right) => {
                 let r = app.chat_rect;
                 if me.column >= r.x
@@ -4406,16 +4030,12 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
         if k.kind != KeyEventKind::Press {
             return;
         }
-        // Ctrl+C quitte TOUJOURS (même menu/panneau/pop-up ouverts).
         if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
             app.should_quit = true;
             return;
         }
-        // Fun modes take over input.
-        // Vérifier d'abord les modules dynamiques (même en mode Chat)
         if let Some(module_name) = app.active_fun_module.clone() {
             if let Some(registry) = &mut app.fun_registry {
-                // Convertir l'événement crossterm en événement zer0fun
                 let fun_event = convert_key_event(k);
                 let mut ctx = zer0fun_api::Context {
                     term_width: app.chat_rect.width,
@@ -4490,14 +4110,12 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
             }
             return;
         }
-        // Pop-up « Chats » (F6) : capture les touches tant qu'il est ouvert.
         if app.chats_popup.is_some() {
             if handle_chats_key(app, k.code) {
                 app.chats_popup = None;
             }
             return;
         }
-        // Overlay `/zer0build` : capture les touches tant qu'il est ouvert.
         if app.zer0build_overlay {
             match k.code {
                 KeyCode::Esc => {
@@ -4512,8 +4130,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
             }
             return;
         }
-        // Side panel focus (right pane). On ne consomme QUE ses touches : toute
-        // autre touche (F3–F10, etc.) relâche le focus et retombe dans la saisie.
         if app.side_mode.is_some() && app.focus_panel {
             let is_radio = app.side_mode == Some(crate::fun::Mode::Radio);
             let is_file = app.side_mode == Some(crate::fun::Mode::File);
@@ -4532,7 +4148,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                     app.focus_panel = false;
                     return;
                 }
-                // `q` ferme les panneaux sauf le shell, où c'est une lettre.
                 KeyCode::Char('q') if !is_term => {
                     app.radio.stop();
                     app.side_mode = None;
@@ -4683,27 +4298,22 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                     app.radio.stop();
                     return;
                 }
-                // Touche non gérée : on quitte le focus et on continue plus bas.
                 _ => app.focus_panel = false,
             }
         }
-        // Tab moves focus to the side panel (when one is open).
         if app.side_mode.is_some() && k.code == KeyCode::Tab {
             app.focus_panel = true;
             return;
         }
-        // Toute frappe efface la sélection souris.
         app.sel_anchor = None;
         app.sel_head = None;
         match k.code {
-            // Copier le dernier message assistant (Ctrl+Shift+C)
             KeyCode::Char('c')
                 if k.modifiers
                     .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
             {
                 copy_last_assistant(app);
             }
-            // Coller depuis le presse-papier (Ctrl+V)
             KeyCode::Char('v')
                 if k.modifiers.contains(KeyModifiers::CONTROL)
                     && !k.modifiers.contains(KeyModifiers::SHIFT) =>
@@ -4723,7 +4333,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                     }
                 }
             }
-            // Coller depuis le presse-papier (Ctrl+Shift+V) - alias
             KeyCode::Char('v')
                 if k.modifiers
                     .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
@@ -4743,7 +4352,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                     }
                 }
             }
-            // Ctrl+C simple = quitter (comportement actuel)
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.should_quit = true
             }
@@ -4763,7 +4371,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                 app.cursor = app.input.chars().count();
             }
             KeyCode::Char(ch) => {
-                // `/` en début de saisie ouvre la palette de commandes filtrante.
                 if ch == '/' && app.picker.is_none() && app.input.trim().is_empty() {
                     open_command_palette(app);
                 } else {
@@ -4771,7 +4378,6 @@ fn handle_input(ev: Event, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                 }
             }
             KeyCode::F(2) => {
-                // Plus de menu permanent : F2 ouvre la palette de commandes.
                 open_command_palette(app);
             }
             KeyCode::F(3) => {
@@ -4839,7 +4445,6 @@ fn handle_ui(ev: UiEvent, app: &mut App) {
             if app.zc.on {
                 app.zc.state = crate::zerochan::State::Speaking;
             }
-            // Defensive cap; the client already bounds the stream.
             if app.streaming_text.len() < 1_200_000 {
                 app.streaming_text.push_str(&t);
             }
@@ -4876,7 +4481,6 @@ fn handle_ui(ev: UiEvent, app: &mut App) {
             }
         }
         UiEvent::ModelList(list) => {
-            // Retient qui accepte les images (garde-fou de /img)…
             app.vision_models = list
                 .iter()
                 .filter(|m| {
@@ -4888,7 +4492,6 @@ fn handle_ui(ev: UiEvent, app: &mut App) {
                 })
                 .map(|m| m.id.clone())
                 .collect();
-            // … puis ouvre le sélecteur.
             let items: Vec<picker::Item> = list
                 .into_iter()
                 .map(|m| {
@@ -4946,8 +4549,6 @@ fn handle_ui(ev: UiEvent, app: &mut App) {
         }
         UiEvent::Compacted(msgs) => {
             let n = msgs.len();
-            // La version compactée doit survivre au redémarrage : sinon elle
-            // n'existait qu'en mémoire et `--resume` rechargeait tout l'historique.
             if let Err(e) = crate::convo::rewrite(&msgs) {
                 app.messages.push(ChatMessage::notice(format!(
                     "⚠ compaction non persistée : {e}"
@@ -4986,8 +4587,6 @@ fn handle_ui(ev: UiEvent, app: &mut App) {
             }
         }
         UiEvent::DebateEnd { cancelled } => {
-            // B5 : sans ça, `app.streaming` restait faux pendant tout le débat
-            // (`/stop` répondait « Rien à interrompre. ») et le restait après.
             app.streaming = false;
             app.streaming_text.clear();
             if cancelled {
@@ -5005,11 +4604,6 @@ fn handle_ui(ev: UiEvent, app: &mut App) {
     }
 }
 
-// ---------------------------------------------------------------- rendering
-
-/// Cellules d'où part l'onde néon : juste au-dessus et juste au-dessous du
-/// bord gauche du panneau latéral. (Avant : la « poignée » d'un menu disparu ;
-/// `Rect::default()` faisait donc partir l'onde du coin haut-gauche.)
 fn wave_sources(panel: Rect) -> [(u16, u16); 2] {
     if panel.width == 0 || panel.height == 0 {
         return [(0, 0), (0, 0)];
@@ -5022,32 +4616,26 @@ fn wave_sources(panel: Rect) -> [(u16, u16); 2] {
 
 fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
-    // Le fond est posé avant tous les widgets : les thèmes noirs restent noirs
-    // même si le terminal utilise un fond clair par défaut.
     f.render_widget(
         Block::default().style(Style::default().bg(theme::background())),
         area,
     );
 
-    // Assistant de première connexion : plein écran, avant tout le reste.
     if app.wizard.is_some() {
         wizard::draw(f, area, app);
         return;
     }
 
-    // Overlay `/provider add` : plein écran lui aussi.
     if app.provider_add.is_some() {
         provider_add::draw(f, area, app);
         return;
     }
 
-    // Overlay `/zer0build` : plein écran.
     if app.zer0build_overlay {
         draw_zer0build_overlay(f, area, app);
         return;
     }
 
-    // Full-screen modes.
     match app.mode {
         crate::fun::Mode::Pong => {
             app.pong.draw(f, area);
@@ -5066,7 +4654,6 @@ fn draw(f: &mut Frame, app: &mut App) {
         crate::fun::Mode::Chat => {}
     }
 
-    // Module fun dynamique actif : plein écran.
     if let Some(module_name) = &app.active_fun_module {
         if let Some(registry) = &app.fun_registry {
             draw_fun_module(f, area, registry, module_name);
@@ -5074,8 +4661,6 @@ fn draw(f: &mut Frame, app: &mut App) {
         }
     }
 
-    // Un mod ouvert occupe une large part de droite ; pas de menu permanent
-    // (la palette `/` et F2 suffisent). Le chat garde le reste.
     if let Some(sm) = app.side_mode {
         if area.width >= 100 {
             let cols = Layout::default()
@@ -5089,8 +4674,6 @@ fn draw(f: &mut Frame, app: &mut App) {
             draw_panel(f, area, app, sm);
             app.panel_rect = area;
         }
-        // Onde néon autour de la page quand un mod est actif : elle part du bord
-        // du panneau (là où l'œil se pose), en haut et en bas.
         neon::draw_wave(f, area, wave_sources(app.panel_rect), app.anim_phase);
     } else {
         draw_agent(f, area, app);
@@ -5099,27 +4682,21 @@ fn draw(f: &mut Frame, app: &mut App) {
     draw_chats_popup(f, area, app);
     finalize_buffer(f, app);
 
-    // Animation « baleine deepseek » : par-dessus le chat, sous les overlays
-    // interactifs (picker), et **hors** de la capture de sélection (`screen`).
     if let Some(w) = &app.whale {
         whale::draw(f, area, w);
     }
 
-    // Sélecteur (/model, /provider) par-dessus tout le reste.
     if let Some(p) = &app.picker {
         picker::draw(f, area, p);
     }
 }
 
-/// Dessine l'overlay `/zer0build`.
 fn draw_zer0build_overlay(f: &mut Frame, area: Rect, app: &App) {
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-    // Effacer l'écran
     f.render_widget(ratatui::widgets::Clear, area);
 
-    // Titre
     let title = " zer0build — Gestion des modules fun ";
     let block = Block::default()
         .title(title)
@@ -5129,7 +4706,6 @@ fn draw_zer0build_overlay(f: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Contenu
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
             "📦 PROCÉDURE COMPLÈTE",
@@ -5238,7 +4814,6 @@ fn draw_zer0build_overlay(f: &mut Frame, area: Rect, app: &App) {
 
     lines.push(Line::from(""));
 
-    // Section 4: Commandes zer0gh0st
     lines.push(Line::from(Span::styled(
         "🎮 COMMANDES ZER0GH0ST",
         Style::default()
@@ -5264,7 +4839,6 @@ fn draw_zer0build_overlay(f: &mut Frame, area: Rect, app: &App) {
     ));
     lines.push(Line::from(""));
 
-    // Footer
     lines.push(Line::from(Span::styled(
         "[Esc] Fermer  [r] Recharger les modules",
         Style::default().fg(ratatui::style::Color::Gray),
@@ -5277,21 +4851,15 @@ fn draw_zer0build_overlay(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(paragraph, inner);
 }
 
-/// Dessine un module fun dynamique.
 fn draw_fun_module(f: &mut Frame, area: Rect, registry: &crate::fun::FunRegistry, name: &str) {
-    // Effacer la zone d'abord
     f.render_widget(ratatui::widgets::Clear, area);
 
-    // Créer un buffer zer0fun
     let mut buf = zer0fun_api::Buffer::new(area.width, area.height);
 
-    // Convertir la zone ratatui en Rect zer0fun
     let fun_area = zer0fun_api::Rect::new(area.x, area.y, area.width, area.height);
 
-    // Dessiner le module
     registry.draw(name, &fun_area, &mut buf);
 
-    // Convertir le buffer zer0fun en rendu ratatui
     let ratatui_buf = f.buffer_mut();
     for y in 0..area.height {
         for x in 0..area.width {
@@ -5325,7 +4893,6 @@ fn draw_fun_module(f: &mut Frame, area: Rect, registry: &crate::fun::FunRegistry
     }
 }
 
-/// Convertit une couleur zer0fun en couleur ratatui.
 fn convert_color(c: zer0fun_api::Color) -> ratatui::style::Color {
     match c {
         zer0fun_api::Color::Black => ratatui::style::Color::Black,
@@ -5349,10 +4916,8 @@ fn convert_color(c: zer0fun_api::Color) -> ratatui::style::Color {
     }
 }
 
-/// Capture le texte affiché (pour la sélection) et surligne la sélection.
 fn finalize_buffer(f: &mut Frame, app: &mut App) {
     let buf = f.buffer_mut();
-    // capture le texte affiché (pour la sélection)
     let mut rows = Vec::with_capacity(buf.area.height as usize);
     for y in 0..buf.area.height {
         let mut s = String::new();
@@ -5362,7 +4927,6 @@ fn finalize_buffer(f: &mut Frame, app: &mut App) {
         rows.push(s);
     }
     app.screen = rows;
-    // surligne la sélection (linéaire, pas rectangulaire : voir selection_text)
     if let (Some(a), Some(h)) = (app.sel_anchor, app.sel_head) {
         if a != h {
             let ((x0, y0), (x1, y1)) = sel_normalized(a, h);
@@ -5429,7 +4993,6 @@ fn centered_rect(pct_x: u16, pct_y: u16, r: Rect) -> Rect {
         .split(vert[1])[1]
 }
 
-/// Convertit un timestamp Unix (UTC) en `YYYY-MM-DD HH:MM`.
 fn fmt_time(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
@@ -5447,7 +5010,6 @@ fn fmt_time(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}")
 }
 
-/// Pop-up de gestion des sessions (F6).
 fn draw_chats_popup(f: &mut Frame, area: Rect, app: &App) {
     let Some((files, selected)) = &app.chats_popup else {
         return;
@@ -5506,18 +5068,17 @@ fn draw_agent(f: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),       // status
-            Constraint::Length(6),       // banner
-            Constraint::Length(1),       // location
-            Constraint::Min(3),          // chat
-            Constraint::Length(input_h), // input (règles haut/bas)
-            Constraint::Length(1),       // footer
+            Constraint::Length(1),
+            Constraint::Length(6),
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(input_h),
+            Constraint::Length(1),
         ])
         .split(area);
 
     draw_status(f, chunks[0], app);
 
-    // Banner + petit bloc Zero-chan à droite.
     let (banner_area, zc_placement) = crate::zerochan::block_layout(chunks[1], app.zc.on);
     let banner = if app.streaming {
         banner::lines_animated(app.anim_phase)
@@ -5528,8 +5089,6 @@ fn draw_agent(f: &mut Frame, area: Rect, app: &mut App) {
         Paragraph::new(banner).alignment(Alignment::Left),
         banner_area,
     );
-    // Large → bloc encadré ; étroit (mod ouvert) → état sur la ligne de la
-    // tagline ; très étroit → rien.
     match zc_placement {
         crate::zerochan::Placement::Boxed(r) => app.zc.draw(f, r),
         crate::zerochan::Placement::Inline(r) => crate::zerochan::draw_inline(f, r, &app.zc),
@@ -5537,8 +5096,6 @@ fn draw_agent(f: &mut Frame, area: Rect, app: &mut App) {
     }
 
     draw_location(f, chunks[2]);
-    // Thème `paper` : le chat vit dans un champ de plan (cadre gradué + trame),
-    // donc inséré d'une cellule. Les autres thèmes n'y touchent pas.
     if blueprint::active() {
         blueprint::draw(f, chunks[3], " № 0042 · PLAN DE COUPE ");
         let inner = blueprint::inner(chunks[3]);
@@ -5547,7 +5104,6 @@ fn draw_agent(f: &mut Frame, area: Rect, app: &mut App) {
         draw_chat(f, chunks[3], app);
     }
 
-    // Barre de saisie + boutons 0chan / micro à droite (visibles dès 60 colonnes).
     if chunks[4].width >= 60 {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
@@ -5652,13 +5208,10 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
 
-    // Invalidation simple et sûre : tout changement de nombre de messages
-    // (nouveau tour, compaction, chargement de session, /clear) vide le cache.
     if app.chat_cache_len != app.messages.len() {
         app.chat_cache.clear();
         app.chat_cache_len = app.messages.len();
     }
-    // Garde-fou mémoire : un historique édité peut créer des clés orphelines.
     if app.chat_cache.len() > 4 * app.messages.len() + 64 {
         app.chat_cache.clear();
         app.chat_cache_len = app.messages.len();
@@ -5666,8 +5219,6 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
 
     app.block_ranges.clear();
     {
-        // `messages` et `chat_cache` sont deux champs distincts : on les emprunte
-        // séparément (le compilateur ne sait pas le faire via `app`).
         let App {
             messages,
             chat_cache,
@@ -5679,7 +5230,6 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
             let key = (mi, width, fingerprint(m));
             let start = lines.len();
 
-            // Sorties d'outils : repliées par défaut, dépliées bloc par bloc.
             if m.role == "tool" {
                 if let Some(cached) = chat_cache.get(&key) {
                     lines.extend(cached.iter().cloned());
@@ -5696,8 +5246,6 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
                         let preview: String = text.lines().take(3).collect::<Vec<_>>().join("\n");
                         push_message(&mut lines, &m.role, &preview, w);
                         if total > 3 {
-                            // Sur le thème paper, des hachures de dessin
-                            // technique au lieu de points de suspension.
                             let more = total - 3;
                             let text = if theme::active().id == "paper" {
                                 format!("   ▚▚▚ {more} ligne(s) — clic droit ou Ctrl+O")
@@ -5758,8 +5306,6 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(paragraph, area);
 }
 
-/// Empreinte courte d'un message : invalide le cache si le contenu ou l'état
-/// déplié change. FNV-1a, O(n) mais bien moins cher que re-découper le texte.
 fn fingerprint(m: &ChatMessage) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut mix = |b: u8| {
@@ -5778,7 +5324,6 @@ fn fingerprint(m: &ChatMessage) -> u64 {
     h
 }
 
-/// Index du message dépliable dont le bloc occupe `line` dans le fil.
 fn block_at(ranges: &[(u16, u16, usize)], line: u16) -> Option<usize> {
     ranges
         .iter()
@@ -5786,15 +5331,12 @@ fn block_at(ranges: &[(u16, u16, usize)], line: u16) -> Option<usize> {
         .map(|(_, _, i)| *i)
 }
 
-/// Ctrl+O : déplie/replie le **dernier** bloc de sortie d'outil.
 fn toggle_last_tool_block(app: &mut App) {
     if let Some(i) = app.messages.iter().rposition(|m| m.role == "tool") {
         app.messages[i].expanded = !app.messages[i].expanded;
     }
 }
 
-/// Résumé compact (une ligne) d'un appel d'outil : on n'affiche **jamais** tout
-/// le contenu envoyé (ex. un fichier Python entier dans `text_editor`).
 fn summarize_tool_call(name: &str, args: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
     let get = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
@@ -5856,8 +5398,6 @@ fn push_message(lines: &mut Vec<Line>, role: &str, text: &str, w: usize) {
     }
 }
 
-/// Rend un message : marqueur coloré + texte, avec fond optionnel (bloc) et
-/// coloration légère (`code` et **gras**). Les blocs ``` sont affichés en surbrillance.
 fn push_block(
     lines: &mut Vec<Line>,
     prefix: &str,
@@ -5867,11 +5407,8 @@ fn push_block(
     bg: Option<Color>,
     dim_text: bool,
 ) {
-    // Largeur **en colonnes** : `👤` et `🖳` ne valent pas 1 caractère.
     let indent = text_width(prefix);
     let mut first = true;
-    // `None` = hors bloc ; `Some("")` = bloc de code générique ;
-    // `Some("diff")` = diff unifié, coloré ligne par ligne (+ / - / @@).
     let mut fence: Option<String> = None;
     let fill = |n: usize| {
         let s = Style::default();
@@ -5910,7 +5447,6 @@ fn push_block(
         }
         let base = {
             let fg = if is_diff {
-                // Un diff se lit par son préfixe : c'est tout l'intérêt.
                 match seg.chars().next() {
                     Some('+') => theme::success(),
                     Some('-') => theme::danger(),
@@ -5925,7 +5461,6 @@ fn push_block(
                 theme::text()
             };
             let s = Style::default().fg(fg);
-            // `@@ -a,n +b,m @@` en gras : c'est l'ancre du hunk.
             let s = if is_diff && seg.starts_with("@@") {
                 s.add_modifier(Modifier::BOLD)
             } else {
@@ -5937,7 +5472,6 @@ fn push_block(
             }
         };
         let mut used = indent;
-        // Titres markdown : `### Titre` → titre gras, dièses retirés.
         let trimmed = seg.trim_start();
         let level = if in_code {
             0
@@ -5957,7 +5491,6 @@ fn push_block(
             used += text_width(&seg);
             spans.push(Span::styled(seg, base));
         } else {
-            // Puces, citations, tableaux, liens markdown.
             let seg = if let Some(rest) = trimmed
                 .strip_prefix("- ")
                 .or_else(|| trimmed.strip_prefix("* "))
@@ -5982,7 +5515,6 @@ fn push_block(
     lines.push(Line::from(""));
 }
 
-/// `[texte](url)` → `texte (url)` : lisible sans rendu riche.
 pub fn expand_links(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
@@ -6011,7 +5543,6 @@ pub fn expand_links(s: &str) -> String {
     out
 }
 
-/// Découpe `\`code\`` et `**gras**` en spans stylés.
 fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut buf = String::new();
@@ -6050,8 +5581,6 @@ fn inline_spans(text: &str, base: Style) -> Vec<Span<'static>> {
     out
 }
 
-/// Découpe `s` en lignes de largeur `w` (par caractères) et renvoie la position
-/// `(ligne, colonne)` du curseur (index en caractères).
 fn wrap_with_cursor(s: &str, w: usize, cursor: usize) -> (Vec<String>, usize, usize) {
     let w = w.max(1);
     let mut lines: Vec<String> = Vec::new();
@@ -6086,7 +5615,6 @@ fn wrap_with_cursor(s: &str, w: usize, cursor: usize) -> (Vec<String>, usize, us
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
-    // Saisie simple : juste `❯ texte` (aucun cadre ni règle).
     let prompt = "❯ ";
     let pad = prompt.chars().count();
     let inner_w = (area.width as usize).saturating_sub(pad).max(1);
@@ -6097,7 +5625,6 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     };
     let (text_lines, crow, ccol) = wrap_with_cursor(&shown, inner_w, app.cursor);
     let max_lines = area.height.max(1) as usize;
-    // Défilement : garder le curseur visible.
     let mut start = text_lines.len().saturating_sub(max_lines);
     if crow < start {
         start = crow;
@@ -6133,7 +5660,6 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// Index d'octet correspondant à un index de caractères.
 fn byte_at(s: &str, char_idx: usize) -> usize {
     s.char_indices()
         .nth(char_idx)
@@ -6141,8 +5667,6 @@ fn byte_at(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
-/// Défilement à la molette : renvoie `(offset, auto_scroll)`.
-/// 3 lignes par cran ; revenir tout en bas réactive le suivi automatique.
 fn wheel_scroll(scroll: u16, max: u16, up: bool) -> (u16, bool) {
     if up {
         (scroll.saturating_sub(3), false)
@@ -6190,7 +5714,6 @@ fn input_delete(app: &mut App) {
 
 fn ctx_label(app: &App) -> String {
     let t = estimate_tokens(app);
-    // Division entière = « 0 % » sous 10 000 tokens sur une fenêtre de 1 M.
     let pct = (t as f64 * 100.0 / app.context_window.max(1) as f64).clamp(0.0, 100.0);
     let pct = if pct < 10.0 {
         format!("{pct:.1}")
@@ -6212,10 +5735,6 @@ fn ctx_window_label(c: u64) -> String {
     }
 }
 
-/// Contexte connu pour les modèles dont le provider ne le rapporte pas.
-/// Fenêtre de contexte connue pour un modèle (table statique).
-///
-/// `pub` : le bot Telegram en a besoin pour son seuil de compaction (B6).
 pub fn known_context(model: &str) -> Option<u64> {
     let m = model.to_ascii_lowercase();
     let has = |s: &str| m.contains(s);
@@ -6321,7 +5840,6 @@ fn handle_ctx(app: &mut App, args: &[&str]) {
     }
 }
 
-/// Interroge le provider pour la fenêtre de contexte du modèle actif.
 pub(super) fn probe_context(app: &App, ui_tx: &UnboundedSender<UiEvent>) {
     let Some(provider) = providers::find(&app.provider_id) else {
         return;
@@ -6342,15 +5860,11 @@ pub(super) fn probe_context(app: &App, ui_tx: &UnboundedSender<UiEvent>) {
     });
 }
 
-/// Hauteur nécessaire pour la zone de saisie (1..=8 lignes + règles haut/bas).
 fn input_height(app: &App, width: u16) -> u16 {
-    // Saisie simple : `❯ ` puis le texte, 1..=8 lignes (pas de cadre).
     let inner_w = width.saturating_sub(2).max(1) as usize;
     wrap_text(&app.input, inner_w).len().clamp(1, 8) as u16
 }
 
-/// Ancre/curseur normalisés en ordre de lecture (ligne, puis colonne),
-/// quelle que soit la direction du glisser (bas→haut, droite→gauche…).
 fn sel_normalized(a: (u16, u16), h: (u16, u16)) -> ((u16, u16), (u16, u16)) {
     if (a.1, a.0) <= (h.1, h.0) {
         (a, h)
@@ -6359,9 +5873,6 @@ fn sel_normalized(a: (u16, u16), h: (u16, u16)) -> ((u16, u16), (u16, u16)) {
     }
 }
 
-/// Colonnes [début, fin] incluses de la ligne `y` dans une sélection linéaire
-/// de `(x0,y0)` à `(x1,y1)`, sur une ligne de `width` colonnes :
-/// 1ʳᵉ ligne = x0→fin, dernière = début→x1, intermédiaires = entières.
 fn sel_row_bounds(y: u16, start: (u16, u16), end: (u16, u16), width: u16) -> (u16, u16) {
     let last = width.saturating_sub(1);
     match (y == start.1, y == end.1) {
@@ -6372,12 +5883,9 @@ fn sel_row_bounds(y: u16, start: (u16, u16), end: (u16, u16), width: u16) -> (u1
     }
 }
 
-/// Texte d'une sélection linéaire sur les lignes capturées `screen`.
-/// (Avant : rectangle x0..=x1 × y0..=y1 — il fallait « dessiner un carré »
-/// et chaque ligne comprenait les colonnes hors propos.)
 fn selection_text(screen: &[String], a: (u16, u16), h: (u16, u16)) -> String {
     if a == h {
-        return String::new(); // simple clic, pas de glisser : rien à copier
+        return String::new();
     }
     let ((x0, y0), (x1, y1)) = sel_normalized(a, h);
     let mut text = String::new();
@@ -6416,7 +5924,6 @@ fn copy_selection(app: &mut App) {
     app.sel_head = None;
 }
 
-/// Copie le contenu propre d'un message par index (sans UI chrome)
 fn copy_message_content(app: &mut App, msg_idx: usize) {
     if let Some(msg) = app.messages.get(msg_idx) {
         if let Some(content) = &msg.content {
@@ -6437,7 +5944,6 @@ fn copy_message_content(app: &mut App, msg_idx: usize) {
     }
 }
 
-/// Copie le dernier message assistant (raccourci Ctrl+Shift+C)
 fn copy_last_assistant(app: &mut App) {
     if let Some(idx) = app.messages.iter().rposition(|m| m.role == "assistant") {
         copy_message_content(app, idx);
@@ -6515,12 +6021,8 @@ fn history_down(app: &mut App) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &mut App) {
-    // `chip_fg` : le texte des pastilles suit le thème (noir sur pastille
-    // claire, papier sur pastille encre).
     let key = Style::default().fg(theme::chip_fg()).bg(theme::highlight());
     let txt = Style::default().fg(theme::dim());
-    // État visible : `code_exec` lance de vraies commandes, l'écran doit dire
-    // s'il est armé (c'était le trou de sécurité de l'audit).
     let rw = if app.read_write {
         Style::default().fg(theme::chip_fg()).bg(theme::warning())
     } else {
@@ -6529,7 +6031,6 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &mut App) {
     let exec = if app.code_exec {
         Style::default().fg(Color::Black).bg(theme::success())
     } else {
-        // Désarmé : clignote jaune/rouge (~2 Hz) pour que ça se voie.
         let warn = (app.anim_phase / 30).is_multiple_of(2);
         Style::default().fg(theme::chip_fg()).bg(if warn {
             theme::warning()
@@ -6538,8 +6039,6 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &mut App) {
         })
     };
     let mut spans: Vec<Span> = Vec::new();
-    // Cartouche de plan (thème paper) : la signature visuelle du thème, en tête
-    // du pied de page. Les autres thèmes gardent le pied de page inchangé.
     if theme::active().id == "paper" {
         spans.push(Span::styled(
             " ⟐ PLAN ",
@@ -6570,8 +6069,6 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &mut App) {
         Span::styled(" Ctrl+O ", key),
         Span::styled(" détail ", txt),
     ]);
-    // Le vote (👍/👎) occupe la droite du pied de page : c'est le bas-droite
-    // de l'écran principal. Les raccourcis gardent la place restante.
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(crate::vote::WIDTH)])
@@ -6592,7 +6089,6 @@ fn estimate_tokens(app: &App) -> usize {
     chars / 4
 }
 
-/// Largeur en colonnes d'un texte (emoji = 2, combinants = 0).
 fn text_width(s: &str) -> usize {
     use unicode_width::UnicodeWidthChar;
     s.chars()
@@ -6600,7 +6096,6 @@ fn text_width(s: &str) -> usize {
         .sum()
 }
 
-/// Coupe un mot trop long pour la largeur, sans dépasser.
 fn hard_wrap(word: &str, width: usize) -> Vec<String> {
     use unicode_width::UnicodeWidthChar;
     let mut out = Vec::new();
@@ -6621,7 +6116,6 @@ fn hard_wrap(word: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// Découpe en lignes de largeur donnée, **aux espaces** quand c'est possible.
 fn wrap_text(s: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut out = Vec::new();
@@ -6665,7 +6159,6 @@ mod tests {
         let src = "Le manque est architectural, pas cosmétique.";
         let lines = wrap_text(src, 20);
         assert!(lines.iter().all(|l| text_width(l) <= 20), "{lines:?}");
-        // Aucun mot coupé : recoller les lignes rend le texte d'origine.
         assert_eq!(lines.join(" "), src, "{lines:?}");
     }
 
@@ -6694,7 +6187,6 @@ mod tests {
         assert!(lines.len() >= 3);
     }
 
-    /// App minimal pour les tests headless (rendu + clics).
     fn test_app() -> App {
         App {
             messages: vec![],
@@ -6783,16 +6275,6 @@ mod tests {
         }
     }
 
-    /// Régression : le menu ET les boutons de vote doivent rester cliquables.
-    ///
-    /// Le clic sur le menu ne doit pas être traité comme une sélection de texte,
-    /// et le clic sur un pouce non plus. Avant, un clic upvote ouvrait un
-    /// navigateur via un process enfant qui héritait de la console : la capture
-    /// souris était perdue et AUCUN clic n'atteignait plus le TUI (menu
-    /// compris). D'où `platform::open()` sans héritage de console et
-    /// `platform::restore_mouse_capture()`.
-    /// L'étape « Clé API » affichait un champ vide donc invisible : on ne
-    /// savait pas où coller la clé. Le placeholder doit être rendu.
     #[test]
     fn wizard_api_key_step_shows_a_visible_field() {
         use ratatui::backend::TestBackend;
@@ -6857,12 +6339,6 @@ mod tests {
     #[test]
     #[cfg(not(windows))]
     fn fast_repeated_keys_are_not_dropped() {
-        // Régression : la déduplication des `Press` (< 50 ms) s'appliquait à
-        // toutes les plateformes et perdait la moitié des lettres doublées
-        // (« deepseek » → « depsek », « llama » → « lama »).
-        //
-        // Sous Windows la dédup reste active (ConPTY rejoue des `Press`) :
-        // ce test n'y a donc pas de sens — c'est le comportement voulu là-bas.
         let mut app = test_app();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         for ch in "deepseek".chars() {
@@ -6900,7 +6376,6 @@ mod tests {
         term.draw(|f| draw(f, &mut app)).unwrap();
         let buf = term.backend().buffer().clone();
 
-        // On cherche la cellule du préfixe `+` / `-` et sa couleur.
         let mut plus = None;
         let mut minus = None;
         for y in 0..buf.area.height {
@@ -6929,7 +6404,6 @@ mod tests {
         );
     }
 
-    /// Vérification visuelle (ignorée en CI) : imprime le rendu d'un diff.
     #[test]
     #[ignore]
     fn dump_tool_diff() {
@@ -6965,7 +6439,6 @@ mod tests {
         }
     }
 
-    /// Colonne de la première occurrence de `ch` sur la ligne `y`.
     fn x_of(buf: &ratatui::buffer::Buffer, y: u16, ch: char) -> (u16, u16) {
         for x in 0..buf.area.width {
             if buf[(x, y)].symbol().contains(ch) {
@@ -6988,7 +6461,6 @@ mod tests {
             parse_theme_cmd("castle set"),
             ThemeCmd::SetDefault("castle".into())
         );
-        // `/theme default` (sans nom) = revenir au défaut, pas l'appliquer.
         assert_eq!(parse_theme_cmd("default"), ThemeCmd::Reset);
         assert_eq!(parse_theme_cmd("reset"), ThemeCmd::Reset);
     }
@@ -7004,7 +6476,6 @@ mod tests {
         whale_on_model_change(&mut app, "openai/gpt-4o");
         assert!(app.whale.is_some(), "deepseek doit déclencher l'animation");
 
-        // Même modèle re-sélectionné : pas de rejeu.
         app.whale = None;
         whale_on_model_change(&mut app, "deepseek/deepseek-chat");
         assert!(app.whale.is_none(), "pas de rejeu pour le même modèle");
@@ -7016,7 +6487,6 @@ mod tests {
         use ratatui::Terminal;
 
         let mut app = test_app();
-        // 55 % de la durée : l'apex, donc la baleine hors de l'eau.
         app.whale = Some(whale::Whale::from_start(
             std::time::Instant::now() - whale::DURATION.mul_f32(0.55),
         ));
@@ -7039,25 +6509,17 @@ mod tests {
 
     #[test]
     fn selection_is_linear_not_a_rectangle() {
-        // Écran : 3 lignes de 10 colonnes.
         let scr: Vec<String> = vec![
             "0123456789".into(),
             "abcdefghij".into(),
             "ABCDEFGHIJ".into(),
         ];
-        // De (8,0) à (2,2) : avant, le rectangle x=2..=8 × y=0..=2 donnait
-        // « 23456789\ncdefghi\nCDEFGHI ». En linéaire : fin de la 1ʳᵉ ligne,
-        // ligne du milieu entière, début de la dernière.
         assert_eq!(selection_text(&scr, (8, 0), (2, 2)), "89\nabcdefghij\nABC");
-        // Même sélection, glissée en sens inverse (bas→haut, droite→gauche).
         assert_eq!(selection_text(&scr, (2, 2), (8, 0)), "89\nabcdefghij\nABC");
-        // Une seule ligne : seulement le segment, pas la ligne entière.
         assert_eq!(selection_text(&scr, (3, 1), (6, 1)), "defg");
-        // Simple clic sans glisser : rien (avant : 1 caractère copié).
         assert_eq!(selection_text(&scr, (4, 1), (4, 1)), "");
     }
 
-    /// B5 : le message de fin de débat doit dire la vérité sur une interruption.
     #[test]
     fn debate_end_message_is_honest_about_interruption() {
         let stopped = debate_end_message(true, 1, 3);
@@ -7072,19 +6534,15 @@ mod tests {
         assert!(!done.contains("interrompu"), "{done}");
     }
 
-    /// B5 : `/stop` pendant un débat doit être ACCEPTÉ (avant, `streaming`
-    /// restait faux et `/stop` répondait « Rien à interrompre. »).
     #[tokio::test]
     async fn stop_is_accepted_while_a_debate_runs() {
         let mut app = test_app();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         crate::cancel::clear();
 
-        // Avant le débat : rien à interrompre, et le drapeau ne bouge pas.
         handle_command(&mut app, "/stop", &tx);
         assert!(!crate::cancel::is_cancelled(), "drapeau posé sans débat");
 
-        // Pendant le débat : `cmd_0box` doit armer `streaming`.
         cmd_0box(&mut app, &["sujet de test"], &tx);
         assert!(
             app.streaming,
@@ -7104,7 +6562,6 @@ mod tests {
         );
         assert!(!app.should_quit, "Échap ne doit pas quitter l'application");
 
-        // Fin de débat : la TUI doit se débloquer.
         handle_ui(UiEvent::DebateEnd { cancelled: true }, &mut app);
         assert!(!app.streaming, "streaming non remis à false après le débat");
         crate::cancel::clear();
@@ -7214,7 +6671,7 @@ mod tests {
     fn wrap_text_behavior() {
         assert_eq!(wrap_text("abcdef", 3), vec!["abc", "def"]);
         assert_eq!(wrap_text("ab\ncd", 10), vec!["ab", "cd"]);
-        assert_eq!(wrap_text("héllo", 2).len(), 3); // comptage par caractères
+        assert_eq!(wrap_text("héllo", 2).len(), 3);
     }
 
     #[test]

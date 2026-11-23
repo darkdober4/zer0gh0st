@@ -25,7 +25,6 @@ BANNER = ["█████ █████ ████   ███  █  ██
           " █    █     █  █  █   █ █ █   █ █   █ █   █     █   █",
           "█████ █████ █   █  ███  █  ███  █   █  ███  ████    █"]
 
-
 class G:
     def __init__(self, cols, rows, pal):
         self.c = [[(" ", None) for _ in range(cols)] for _ in range(rows)]
@@ -42,10 +41,8 @@ class G:
         for i, ch in enumerate(t):
             self.put(x + i, y, ch, col, force)
 
-
 def shade(rgb, f):
     return tuple(max(0, min(255, int(v * f))) for v in rgb)
-
 
 def bevel_banner(g, x0, y0, rainbow=False):
     """Banner en blocs relief 3D (arête claire / face / ombre)."""
@@ -65,7 +62,6 @@ def bevel_banner(g, x0, y0, rainbow=False):
                 int(127 + 127*math.sin(x*0.08)), int(127 + 127*math.sin(x*0.08+2)), int(127+127*math.sin(x*0.08+4)))
             f = 1.45 if (not up or not left) else (0.62 if (not down or not right) else 1.0)
             g.put(x0 + x, y0 + y, "█", shade(base, f))
-
 
 def braille_line(g, x0, y0, w, h, series, col):
     """Courbe en braille : 2×4 points par cellule."""
@@ -101,7 +97,6 @@ def braille_line(g, x0, y0, w, h, series, col):
     for (cx, cy), bits in cells.items():
         g.put(x0 + cx, y0 + cy, chr(0x2800 + bits), col)
 
-
 def spark(n, seed=0.0):
     """Marche aléatoire déterministe et lissée (allure d'un cours sur 7 jours)."""
     import random
@@ -110,13 +105,12 @@ def spark(n, seed=0.0):
     for i in range(n):
         v += rnd.uniform(-0.18, 0.20) + 0.03 * math.sin(i * 0.15 + seed)
         out.append(v)
-    # lissage léger : un cours ne zigzague pas cellule par cellule
+
     sm = []
     for i in range(len(out)):
         w = out[max(0, i - 2):i + 3]
         sm.append(sum(w) / len(w))
     return sm
-
 
 COINS = [
     ("BTC", "64 947 $", "+2,4 %", 0.0),
@@ -125,7 +119,6 @@ COINS = [
     ("SOL",    "148 $", "+0,7 %", 3.4),
     ("XRP",   "0,52 $", "−3,2 %", 4.2),
 ]
-
 
 def panel_rows(g, x0, x1, y0, y1, coins, pal, stale=None, compact=False):
     """Watchlist. 3 rangées par actif (sparkline 12×2) ou 1 rangée (compact)."""
@@ -151,19 +144,18 @@ def panel_rows(g, x0, x1, y0, y1, coins, pal, stale=None, compact=False):
         g.s(x0 + 2, y1 - 2, " maj il y a 12 s · 1 requête / 15 s", pal["dim"])
     g.s(x0 + 2, y1 - 1, " /0cg add <id|sym> · rm · list · r", pal["dim"])
 
-
 def screen(pal, theme_name, coins, stale=None):
     g = G(COLS, ROWS, pal)
     for y in range(ROWS):
         for x in range(COLS):
             g.put(x, y, " ", pal["bg"])
-    # statut
+
     g.s(0, 0, "ctx 0.0%/1.0M · 96 tok  ·······  O No project   think:off", pal["dim"])
     g.s(66, 0, "OpenRouter · deepseek-v4.1-flash", pal["dim"])
     bevel_banner(g, 0, 1)
     g.s(3, 6, "ghost in the shell", pal["dim"])
     g.s(0, 7, "Local /home/omar0   |   Projet /home/omar0/ZER0v1", pal["dim"])
-    # chat (gauche) : cadre de plan + 2 messages
+
     fx1, fy0, fy1 = 56, 9, 26
     for x in range(0, fx1):
         g.put(x, fy0, "─", pal["border"]); g.put(x, fy1, "─", pal["border"])
@@ -181,14 +173,13 @@ def screen(pal, theme_name, coins, stale=None):
     g.s(2, fy0 + 6, "> vous  ajoute TAO et retire XRP", pal["accent"])
     g.s(2, fy0 + 8, "> zer0  Fait : /0cg add tao · /0cg rm xrp", pal["text"])
     g.s(0, 27, "❯ ", pal["accent"])
-    # panneau 0cg
+
     panel_rows(g, 58, 103, 9, 26, coins, pal, stale, compact=len(coins) > 4)
-    # pied
+
     g.s(0, 29, " ◆ PLAN ", pal["accent"] if theme_name == "paper" else pal["text"])
     g.s(9, 29, "ÉCH. 1:1 │ ", pal["dim"])
     g.s(20, 29, " F6  Chats   F7  Nudge   Ctrl+C  Exit   F3  Read&Write   F4  Code-exec", pal["dim"])
     return g
-
 
 def render(g, path):
     fnt = ImageFont.truetype(FONT, FS)
@@ -201,7 +192,6 @@ def render(g, path):
                 d.text((x * CW, y * CH), ch, font=fnt, fill=col or g.p["text"])
     img.save(path)
     print(path)
-
 
 if __name__ == "__main__":
     render(screen(PAPER, "paper", COINS[:4]), "/home/omar0/bg-variants/0cg-paper.png")

@@ -1,11 +1,7 @@
-//! Chargement et validation de la configuration email.
-//! Les secrets proviennent uniquement de variables d'environnement.
-
 use crate::email::error::EmailError;
 use serde::Deserialize;
 use std::env;
 
-/// Configuration email chargée depuis l'environnement.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmailConfig {
     pub imap_host: String,
@@ -25,8 +21,6 @@ pub struct EmailConfig {
 }
 
 impl EmailConfig {
-    /// Charge la configuration depuis les variables d'environnement.
-    /// Retourne une erreur si une variable requise est manquante.
     pub fn from_env() -> Result<Self, EmailError> {
         let get = |key: &str| -> Result<String, EmailError> {
             env::var(key).map_err(|_| EmailError::ConfigMissing(key.to_string()))
@@ -66,7 +60,6 @@ impl EmailConfig {
         })
     }
 
-    /// Valide la configuration au démarrage.
     pub fn validate(&self) -> Result<(), EmailError> {
         if self.imap_host.is_empty() || self.imap_user.is_empty() {
             return Err(EmailError::ConfigInvalid(

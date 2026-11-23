@@ -1,30 +1,13 @@
-//! Base de connaissance locale : SQLite + FTS5 (+ recherche vectorielle optionnelle).
-//!
-//! Reproduit `zero_knowledge.db` du Zer0 Python, en Rust. Le magasin est un fichier
-//! SQLite embarqué (`rusqlite`, feature `bundled`). La recherche est **hybride** :
-//! FTS5 (full-text) + cosinus sur des embeddings stockés en BLOB — si un embedder est
-//! configuré (sinon FTS5 seul, et on le dit).
-
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
 use crate::mods;
 
-/// Fichier SQLite de la base de connaissance.
-///
-/// Dans un checkout source : `<projet>/knowledge.db` (comme `data/`).
-/// Pour un binaire **installé** ailleurs (ex. `/usr/local/bin/zer0`), la racine
-/// du projet déduite du chemin de l'exécutable n'existe pas — on écrit alors
-/// dans le dossier de données de l'utilisateur, sinon la base part à la
-/// racine du système et échoue en « unable to open database file ».
 pub fn db_path() -> PathBuf {
-    // Toujours dans le dossier de données utilisateur (XDG), comme `data/`.
-    // La migration depuis `<projet>/knowledge.db` est faite par `config::data_dir`.
     crate::config::data_dir().join("knowledge.db")
 }
 
-/// Dossier source par défaut (`<ZER0v1>/base_connaissance`).
 pub fn default_dir() -> PathBuf {
     std::env::var("ZER0_KB_DIR")
         .map(PathBuf::from)
@@ -33,8 +16,6 @@ pub fn default_dir() -> PathBuf {
             if root.join("Cargo.toml").is_file() {
                 root.join("base_connaissance")
             } else {
-                // Binaire installé hors checkout : pas de dossier projet →
-                // on reste dans le dossier de données de l'utilisateur.
                 crate::config::data_dir().join("base_connaissance")
             }
         })
@@ -49,23 +30,13 @@ pub struct Hit {
     pub score: f32,
 }
 
-/// Version du schéma SQLite (`PRAGMA user_version`).
 const KB_SCHEMA_VERSION: i64 = 1;
 
-/// Normalise une `source` pour que le même fichier ne soit jamais indexé
-/// deux fois sous deux formes différentes (absolu vs relatif, `./`, `../`,
-/// symlinks…).
-///
-/// Les identifiants non-chemin (`note:projet-x`, `manuel:123`, URLs…) sont
-/// renvoyés tels quels. Les chemins sont résolus en absolu canonique
-/// (`canonicalize` si le fichier existe, sinon normalisation lexicale).
 pub fn canonical_source(source: &str) -> String {
     let s = source.trim();
     if s.is_empty() {
         return s.to_string();
     }
-    // Schéma URI / identifiant libre (`note:…`, `manuel:…`, `https://…`) :
-    // pas un chemin fichier. Exception : `C:\…` / `C:/…` (Windows).
     if let Some(colon) = s.find(':') {
         let is_windows_drive = colon == 1
             && s[..1].chars().all(|c| c.is_ascii_alphabetic())
@@ -82,11 +53,9 @@ pub fn canonical_source(source: &str) -> String {
         }
     }
     let p = Path::new(s);
-    // Chemin existant : forme canonique absolue (résout `.`/`..`/symlinks).
     if let Ok(canon) = std::fs::canonicalize(p) {
         return canon.to_string_lossy().to_string();
     }
-    // Chemin inexistant : absolu lexical (cwd + nettoyage `.`/`..`).
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {
@@ -97,8 +66,6 @@ pub fn canonical_source(source: &str) -> String {
     lexical_clean(&abs).to_string_lossy().to_string()
 }
 
-/// Nettoie un chemin absolu sans toucher au disque : supprime `.`,
-/// résout `..` lexicalement.
 fn lexical_clean(p: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
@@ -117,9 +84,6 @@ fn lexical_clean(p: &Path) -> PathBuf {
     out
 }
 
-/// Anciennes formes non canoniques d'un fichier : relatif depuis le cwd,
-/// relatif depuis la racine projet, `./…`. Utilisé pour purger les doublons
-/// historiques lors d'une ré-ingestion.
 fn legacy_source_forms(canon: &str) -> Vec<String> {
     let mut out = Vec::new();
     let p = Path::new(canon);
@@ -132,14 +96,6 @@ fn legacy_source_forms(canon: &str) -> Vec<String> {
     out
 }
 
-/// Fusionne les sources qui désignent le même fichier sous des formes
-/// différentes (ex. `base_connaissance/x.tsv` et
-/// `/home/…/base_connaissance/x.tsv`).
-///
-/// Pour chaque groupe de sources canoniquement identiques, on garde le
-/// groupe le plus récent (ids les plus élevés) et on supprime les autres ;
-/// le groupe gardé est renommé sous sa forme canonique. Retourne le nombre
-/// de sources supprimées/renommées.
 pub fn dedupe_sources_on(c: &Connection) -> Result<usize> {
     let mut stmt = c.prepare("SELECT DISTINCT source FROM knowledge")?;
     let sources: Vec<String> = stmt
@@ -147,7 +103,6 @@ pub fn dedupe_sources_on(c: &Connection) -> Result<usize> {
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(stmt);
 
-    // Groupe par forme canonique.
     let mut groups: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     for src in &sources {
@@ -162,7 +117,6 @@ pub fn dedupe_sources_on(c: &Connection) -> Result<usize> {
         if group.len() == 1 && group[0] == *canon {
             continue;
         }
-        // Groupe le plus récent = max(id) le plus élevé.
         let newest = group
             .iter()
             .map(|src| {
@@ -202,8 +156,6 @@ pub fn dedupe_sources_on(c: &Connection) -> Result<usize> {
     Ok(changed)
 }
 
-/// Un fichier source existe-t-il encore ? Les anciens index peuvent contenir
-/// des chemins **relatifs** : on les résout depuis le cwd puis la racine projet.
 pub fn source_exists(src: &str) -> bool {
     let p = Path::new(src);
     if p.is_absolute() {
@@ -212,8 +164,6 @@ pub fn source_exists(src: &str) -> bool {
     p.exists() || crate::mods::project_root().join(p).exists()
 }
 
-/// Supprime les chunks dont la source n'existe plus, puis reconstruit le FTS.
-/// `exists` est injecté pour être testable sans disque réel.
 pub fn purge_missing_on<F: Fn(&str) -> bool>(c: &Connection, exists: F) -> Result<usize> {
     let mut stmt = c.prepare("SELECT DISTINCT source FROM knowledge")?;
     let sources: Vec<String> = stmt
@@ -237,7 +187,6 @@ pub fn purge_missing() -> Result<usize> {
     purge_missing_on(&c, source_exists)
 }
 
-/// Retire toutes les sources dont le chemin **contient** `pattern`.
 pub fn drop_source_on(c: &Connection, pattern: &str) -> Result<usize> {
     let pat = format!("%{}%", pattern.trim());
     let n = c.execute("DELETE FROM knowledge WHERE source LIKE ?1", params![pat])?;
@@ -250,8 +199,6 @@ pub fn drop_source_on(c: &Connection, pattern: &str) -> Result<usize> {
     Ok(n)
 }
 
-/// Fusionne les sources non canoniques (absolu vs relatif, `./`, symlinks)
-/// dans une seule entrée par fichier. Retourne le nombre de lignes modifiées.
 pub fn dedupe_sources() -> Result<usize> {
     let c = open()?;
     dedupe_sources_on(&c)
@@ -265,10 +212,6 @@ pub fn drop_source(pattern: &str) -> Result<usize> {
     drop_source_on(&c, pattern)
 }
 
-/// Garde **un seul chunk par source** (le premier, donc le mieux classé).
-///
-/// Sans ça, un livre volumineux peut fournir les 3 extraits injectés à lui seul
-/// et masquer tout le reste de la base.
 pub fn one_per_source(hits: Vec<Hit>) -> Vec<Hit> {
     let mut seen: Vec<String> = Vec::new();
     let mut out = Vec::with_capacity(hits.len());
@@ -291,17 +234,6 @@ pub(crate) fn open() -> Result<Connection> {
     Ok(c)
 }
 
-/// Récupère une base historique restée dans le checkout quand la base courante
-/// est vide.
-///
-/// Cas réel : le binaire a été lancé une fois **avant** la migration XDG, ce qui
-/// a créé une base vide dans `~/.local/share/zer0gh0st/` ; la migration ne copie
-/// jamais par-dessus un fichier existant, donc les 1 283 chunks du checkout
-/// devenaient invisibles. On rattache l'ancienne base, on copie les lignes et on
-/// reconstruit l'index FTS.
-///
-/// Les **vecteurs** ne sont pas importés (leurs identifiants référencent
-/// l'ancienne base) : il faut relancer `kb ingest --embed` pour les recalculer.
 fn import_legacy_if_empty(c: &Connection, current: &Path) {
     let local: i64 = c
         .query_row("SELECT COUNT(*) FROM knowledge", [], |r| r.get(0))
@@ -344,7 +276,6 @@ fn import_legacy_if_empty(c: &Connection, current: &Path) {
     let _ = c.execute("DETACH DATABASE legacy", []);
 }
 
-/// Refuse d'écrire dans une base créée par un binaire plus récent.
 fn check_schema(c: &Connection, path: &Path) -> Result<()> {
     let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if v > KB_SCHEMA_VERSION {
@@ -377,15 +308,12 @@ fn init(c: &Connection) -> Result<()> {
              vector       BLOB NOT NULL
          );",
     )?;
-    // FTS5 (contenu externe = table knowledge).
     c.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
          USING fts5(sujet, contenu, content='knowledge', content_rowid='id');",
     )?;
     Ok(())
 }
-
-// ------------------------------------------------------------------ ingestion
 
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -401,8 +329,6 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            // `tsv`/`csv` : catalogues tabulaires (ex. le catalogue d'APIs
-            // publiques, importé par scripts/kb-import-public-apis.sh).
             if matches!(ext.as_str(), "txt" | "md" | "rst" | "org" | "tsv" | "csv") {
                 out.push(p);
             }
@@ -441,12 +367,7 @@ fn blob_to_f32(b: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-// --------------------------------------------------------------------- search
-
-/// Mots vides ignorés dans la requête FTS (FR + EN).
 const STOPWORDS: &[&str] = &[
-    // Salutations et politesses : une conversation qui commence par « salut »
-    // n'a aucune raison de déclencher une recherche dans la base.
     "salut",
     "bonjour",
     "bonsoir",
@@ -588,7 +509,6 @@ const STOPWORDS: &[&str] = &[
     "juste",
 ];
 
-/// Mots significatifs d'une requête (minuscule, >=3 lettres, sans stopword).
 pub fn tokens(raw: &str) -> Vec<String> {
     raw.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -597,7 +517,6 @@ pub fn tokens(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// Construit une requête FTS5 (guillemets par terme, liaison `op`).
 fn fts_query(raw: &str, op: &str) -> String {
     let ts = tokens(raw);
     if ts.is_empty() {
@@ -610,7 +529,6 @@ fn fts_query(raw: &str, op: &str) -> String {
 }
 
 fn fts_search(c: &Connection, query: &str, limit: usize) -> Result<Vec<Hit>> {
-    // d'abord AND (tous les termes significatifs), sinon OR (un des termes).
     for op in [" AND ", " OR "] {
         let q = fts_query(query, op);
         if q.is_empty() {
@@ -660,12 +578,7 @@ fn like_search(c: &Connection, query: &str, limit: usize) -> Result<Vec<Hit>> {
     Ok(rows.filter_map(|x| x.ok()).collect())
 }
 
-/// Recherche hybride FTS5 + vectoriel. `degraded` = pas d'embedder / pas de vecteurs.
 pub async fn search(query: &str, limit: usize) -> (Vec<Hit>, Option<String>) {
-    // L'embedding est une requête réseau (await) ; tout le reste est du SQLite
-    // synchrone (FTS5 + scan des vecteurs). Cette recherche tourne à **chaque
-    // tour** (injection de connaissance) : elle ne doit pas bloquer un worker du
-    // runtime. On isole donc l'embedding, puis la base part en `spawn_blocking`.
     let embedder = crate::memory::embedder_id();
     let (qv, embed_err) = match &embedder {
         Some(_) => match crate::memory::embed(query).await {
@@ -681,14 +594,12 @@ pub async fn search(query: &str, limit: usize) -> (Vec<Hit>, Option<String>) {
     {
         return (hits, degraded.or(embed_err));
     }
-    // La tâche bloquante a paniqué : on dégrade, sans mentir sur la cause.
     (
         Vec::new(),
         Some("recherche interrompue (tâche bloquante)".into()),
     )
 }
 
-/// Partie 100 % synchrone de la recherche (exécutée hors du runtime async).
 fn search_blocking(
     query: &str,
     limit: usize,
@@ -778,28 +689,16 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-// ------------------------------------------------------------------- ingestion
-
-/// Bilan d'une ingestion : ce qui a réussi **et** ce qui a échoué.
-///
-/// Avant, `ingest_dir` retournait `(fichiers, chunks)` et avalait les erreurs
-/// d'embedding (`if let Ok(v) = embed(...)`). Résultat mesuré : 249 chunks
-/// indexés, **32 vecteurs**, et la commande affichait un succès. Un index
-/// couvert à 13 % sans le dire est pire qu'un échec franc.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IngestReport {
     pub files: usize,
     pub chunks: usize,
-    /// Chunks dont le vecteur a été calculé et stocké.
     pub embedded: usize,
-    /// Chunks dont l'embedding a échoué (le chunk reste indexé en FTS5).
     pub embed_failed: usize,
-    /// Première erreur rencontrée, pour ne pas laisser l'utilisateur deviner.
     pub first_error: Option<String>,
 }
 
 impl IngestReport {
-    /// Message lisible : ne cache jamais un échec partiel.
     pub fn summary(&self, dir: &Path) -> String {
         let mut s = format!(
             "Indexé : {} fichier(s), {} chunk(s) depuis {}",
@@ -822,8 +721,6 @@ impl IngestReport {
     }
 }
 
-/// Indexe un dossier (récursif). `embed=true` calcule les embeddings (si embedder configuré).
-/// Avancement d'une ingestion (chunks traités sur le total estimé).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IngestProgress {
     pub done: usize,
@@ -839,7 +736,6 @@ impl IngestProgress {
         }
     }
 
-    /// Secondes par chunk (0 tant qu'aucun n'est traité).
     pub fn secs_per_chunk(&self) -> f64 {
         if self.done == 0 {
             0.0
@@ -848,7 +744,6 @@ impl IngestProgress {
         }
     }
 
-    /// Estimation du temps restant, `None` si on ne peut pas la calculer.
     pub fn eta(&self) -> Option<std::time::Duration> {
         if self.done == 0 || self.total <= self.done {
             return None;
@@ -858,7 +753,6 @@ impl IngestProgress {
     }
 }
 
-/// Faut-il publier cet avancement ? Tous les 5 % (au moins 1 chunk) et à la fin.
 pub fn should_report(done: usize, total: usize) -> bool {
     if done == 0 {
         return false;
@@ -870,14 +764,11 @@ pub fn should_report(done: usize, total: usize) -> bool {
     done.is_multiple_of(step)
 }
 
-/// Ligne d'avancement lisible (pure : testable sans terminal).
 pub fn progress_text(p: IngestProgress) -> String {
     let mut out = format!("[{} / {} chunks] {} %", p.done, p.total, p.pct());
     if p.done > 0 {
         out.push_str(&format!(" — {:.1} s/chunk", p.secs_per_chunk()));
     }
-    // Une ETA n'a de sens qu'avec une mesure réelle : sans embedder, tout est
-    // instantané et « reste ≈ 1 min » serait un mensonge.
     if let Some(eta) = p.eta() {
         if p.secs_per_chunk() >= 0.5 {
             let mins = (eta.as_secs_f64() / 60.0).round() as u64;
@@ -887,10 +778,6 @@ pub fn progress_text(p: IngestProgress) -> String {
     out
 }
 
-/// Nombre de chunks produits par un ensemble de fichiers (pré-passe).
-///
-/// Une pré-passe plutôt qu'une estimation : l'utilisateur voit un vrai
-/// « 128 / 249 », pas un compteur qui s'allonge en cours de route.
 fn count_chunks(files: &[PathBuf]) -> usize {
     let mut total = 0;
     for f in files {
@@ -904,16 +791,12 @@ fn count_chunks(files: &[PathBuf]) -> usize {
     total
 }
 
-/// Chunks validés entre deux `COMMIT`. Un `Ctrl+C` conserve donc les chunks
-/// déjà commités au lieu de perdre toute l'ingestion (constaté : 40 min de
-/// calcul perdues d'un coup).
 const COMMIT_EVERY: usize = 25;
 
 pub async fn ingest_dir(dir: &Path, embed: bool) -> Result<IngestReport> {
     ingest_dir_with(dir, embed, &|_| {}).await
 }
 
-/// Comme `ingest_dir`, en publiant l'avancement (`progress`) au fil de l'eau.
 pub async fn ingest_dir_with(
     dir: &Path,
     embed: bool,
@@ -925,13 +808,10 @@ pub async fn ingest_dir_with(
         return Err(anyhow!("aucun fichier texte dans {}", dir.display()));
     }
 
-    // Total connu à l'avance : la progression est honnête dès le premier chunk.
     let total = count_chunks(&files);
     let started = std::time::Instant::now();
 
     let c = open()?;
-    // Transaction par paquets de `COMMIT_EVERY` chunks : un fsync par chunk
-    // serait très lent, une transaction unique perdrait tout en cas d'arrêt.
     c.execute_batch("BEGIN")?;
     let embedder = if embed {
         crate::memory::embedder_id()
@@ -945,9 +825,7 @@ pub async fn ingest_dir_with(
             continue;
         };
         let source = canonical_source(&f.to_string_lossy());
-        // remplace les entrées précédentes de ce fichier (toute forme de chemin)
         c.execute("DELETE FROM knowledge WHERE source = ?1", params![source])?;
-        // … y compris les anciennes formes non canoniques du même fichier
         for old in legacy_source_forms(&source) {
             if old != source {
                 c.execute("DELETE FROM knowledge WHERE source = ?1", params![old])?;
@@ -974,9 +852,6 @@ pub async fn ingest_dir_with(
                 params![id, sujet, ch],
             )?;
             if let Some(emb) = &embedder {
-                // Ne JAMAIS avaler l'erreur : un chunk sans vecteur doit être
-                // compté et signalé (constat : 249 chunks, 32 vecteurs, succès
-                // affiché). Le chunk reste indexé en FTS5, ce n'est pas fatal.
                 match crate::memory::embed(&ch).await {
                     Ok(v) => {
                         c.execute(
@@ -998,10 +873,6 @@ pub async fn ingest_dir_with(
                 c.execute_batch("COMMIT")?;
                 c.execute_batch("BEGIN")?;
             }
-            // Un rapport **par chunk** : c'est l'appelant qui décide du rythme
-            // d'affichage (1 s en TTY, 5 % en pipe, 20 % dans la TUI). Signaler
-            // seulement tous les 5 % laissait l'écran muet plusieurs minutes au
-            // démarrage (constaté : « il n'y a rien à afficher »).
             progress(IngestProgress {
                 done: report.chunks,
                 total,
@@ -1013,12 +884,6 @@ pub async fn ingest_dir_with(
     Ok(report)
 }
 
-/// Ajoute un texte libre à la base, avec **le même pipeline** que l'ingestion
-/// de fichiers (chunks + FTS5 + embeddings). `source` est l'identifiant :
-/// ré-ajouter la même source remplace ses anciens chunks (idempotent).
-///
-/// Les embeddings sont calculés **avant** d'ouvrir la connexion : on ne tient
-/// jamais un `Connection` (non-Send) à travers un `.await`.
 pub async fn add(source: &str, sujet: &str, text: &str, embed: bool) -> Result<(usize, bool)> {
     if text.trim().is_empty() {
         return Err(anyhow!("texte vide"));
@@ -1081,7 +946,6 @@ pub async fn add(source: &str, sujet: &str, text: &str, embed: bool) -> Result<(
     Ok((n, embedded))
 }
 
-/// Reconstruit l'index FTS5.
 pub fn rebuild_fts() -> Result<()> {
     let c = open()?;
     c.execute(
@@ -1091,8 +955,6 @@ pub fn rebuild_fts() -> Result<()> {
     Ok(())
 }
 
-/// Supprime les vecteurs dont le chunk n'existe plus (restes des réingestions).
-/// Retourne le nombre de lignes supprimées.
 pub fn prune_orphan_vectors() -> Result<usize> {
     let c = open()?;
     let n = c.execute(
@@ -1123,7 +985,6 @@ mod orphan_tests {
             )
             .unwrap();
         }
-        // Un vecteur qui ne correspond à aucun chunk (id 999).
         c.execute(
             "INSERT INTO embeddings (knowledge_id, embedder, vector) VALUES (999, 'e', x'00')",
             [],
@@ -1170,9 +1031,6 @@ pub fn stats() -> Result<String> {
         embedder.as_deref().unwrap_or("(aucun)"),
         search_mode(embedder.as_deref(), vecs)
     );
-    // Des vecteurs dont le chunk n'existe plus : restes des réingestions (chaque
-    // réingestion recrée des ids). Inertes pour la recherche, mais ils gonflent
-    // la base et faussent le compte affiché ci-dessus.
     if orphans > 0 {
         out.push_str(&format!(
             "\n  orphelins        : {orphans} vecteur(s) sans chunk (nettoyage : `zer0 kb rebuild`)"
@@ -1181,11 +1039,6 @@ pub fn stats() -> Result<String> {
     Ok(out)
 }
 
-/// Mode de recherche effectif, dit sans ambiguïté.
-///
-/// M6 : la doc annonçait « hybride » alors que la base tourne en FTS5 pur tant
-/// qu'aucun embedder n'est configuré (`/embeddings set <provider> <model>`).
-/// Un utilisateur doit pouvoir lire l'état réel, pas le mode théorique.
 fn search_mode(embedder: Option<&str>, vectors: i64) -> String {
     match (embedder, vectors) {
         (None, _) => {
@@ -1199,9 +1052,6 @@ fn search_mode(embedder: Option<&str>, vectors: i64) -> String {
     }
 }
 
-// ---------------------------------------------------------------------- log
-
-/// Fichier de log des injections (`<ZER0v1>/knowledge.log`).
 pub fn log_path() -> PathBuf {
     crate::config::data_dir().join("knowledge.log")
 }
@@ -1210,7 +1060,6 @@ fn now() -> String {
     crate::platform::now()
 }
 
-/// Journalise une injection : requête + sources (fichier + score).
 pub fn log_injection(query: &str, hits: &[Hit]) {
     if hits.is_empty() {
         return;
@@ -1232,7 +1081,6 @@ pub fn log_injection(query: &str, hits: &[Hit]) {
     }
 }
 
-/// Dernières lignes du log (pour `/kb log`).
 pub fn tail_log(n: usize) -> String {
     let Ok(s) = std::fs::read_to_string(log_path()) else {
         return format!("Aucun log encore ({})", log_path().display());
@@ -1282,23 +1130,18 @@ mod tests {
         .unwrap();
     }
 
-    /// M6 : le mode de recherche doit être dit sans ambiguïté, pas « hybride »
-    /// quand la base tourne en FTS5 pur.
     #[test]
     fn search_mode_states_the_truth() {
-        // Aucun embedder : FTS5 seul, et on indique comment en configurer un.
         let none = search_mode(None, 0);
         assert!(none.contains("FTS5 seul"), "{none}");
         assert!(none.contains("/embeddings set"), "{none}");
         assert!(!none.contains("hybride"), "{none}");
 
-        // Embedder configuré mais base jamais ingérée avec : toujours FTS5 seul.
         let idle = search_mode(Some("local/bge-m3"), 0);
         assert!(idle.contains("FTS5 seul"), "{idle}");
         assert!(idle.contains("--embed"), "{idle}");
         assert!(!idle.contains("hybride"), "{idle}");
 
-        // Embedder + vecteurs : là seulement, c'est hybride.
         let hybrid = search_mode(Some("local/bge-m3"), 249);
         assert!(hybrid.contains("hybride"), "{hybrid}");
         assert!(hybrid.contains("249"), "{hybrid}");
@@ -1352,11 +1195,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("z0-chunks-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let a = dir.join("a.md");
-        std::fs::write(&a, "x".repeat(2500)).unwrap(); // 3 chunks de 1200
+        std::fs::write(&a, "x".repeat(2500)).unwrap();
         let b = dir.join("b.txt");
-        std::fs::write(&b, "court").unwrap(); // 1 chunk
+        std::fs::write(&b, "court").unwrap();
         let empty = dir.join("c.md");
-        std::fs::write(&empty, "   \n").unwrap(); // ignoré
+        std::fs::write(&empty, "   \n").unwrap();
         let files = vec![a, b, empty];
         assert_eq!(count_chunks(&files), 4);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1374,7 +1217,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM knowledge", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
-        // le FTS suit la suppression (reconstruit)
         let fts: i64 = c
             .query_row("SELECT COUNT(*) FROM knowledge_fts", [], |r| r.get(0))
             .unwrap();
@@ -1426,9 +1268,6 @@ mod tests {
 
     #[test]
     fn canonical_source_unifies_relative_and_absolute() {
-        // Même fichier, deux formes → une seule forme canonique. Les chemins
-        // sont construits depuis le cwd : `/home/omar0/...` n'existe pas sur
-        // la CI (et un chemin absolu Windows ne commence pas par `/`).
         let cwd = std::env::current_dir().unwrap();
         let rel = "base_connaissance/public-apis.tsv";
         let abs_path = cwd.join(rel);
@@ -1446,15 +1285,12 @@ mod tests {
         if abs_path.is_file() {
             assert_eq!(canonical_source(rel), abs);
         }
-        // `./` et `../` ne changent rien.
         assert_eq!(canonical_source("./x/../y.txt"), canonical_source("y.txt"));
     }
 
     #[test]
     fn dedupe_merges_relative_and_absolute_forms() {
         let c = mem_db();
-        // Chemins construits depuis le cwd réel : sur la CI, `/home/omar0/…`
-        // n'existe pas et le test échouait (absolu codé en dur).
         let cwd = std::env::current_dir().unwrap();
         let rel = "base_connaissance/public-apis.tsv";
         let abs = cwd.join(rel);
@@ -1468,8 +1304,6 @@ mod tests {
         let n: i64 = c
             .query_row("SELECT COUNT(*) FROM knowledge", [], |r| r.get(0))
             .unwrap();
-        // Le groupe le plus récent (relatif) est gardé, renommé en canonique ;
-        // l'autre fichier reste intact.
         assert_eq!(n, 2);
         let srcs: Vec<String> = c
             .prepare("SELECT DISTINCT source FROM knowledge ORDER BY source")
@@ -1487,25 +1321,20 @@ mod tests {
 
     #[test]
     fn greetings_produce_no_tokens() {
-        // « salut » ne doit déclencher aucune recherche dans la base.
         assert!(tokens("salut").is_empty());
         assert!(tokens("bonjour").is_empty());
         assert!(tokens("merci beaucoup").iter().all(|t| t != "merci"));
-        // … mais un vrai mot reste un mot.
         assert_eq!(tokens("salut rust"), vec!["rust".to_string()]);
     }
 
     #[test]
     fn tokens_filters_short_and_stopwords() {
-        // Mots longs non-stopwords conservés.
         assert_eq!(
             tokens("algorithmique boussole"),
             vec!["algorithmique", "boussole"]
         );
-        // Tokens < 3 lettres ignorés.
         assert!(tokens("a bb ccc").contains(&"ccc".to_string()));
         assert!(!tokens("a bb").iter().any(|t| t.len() < 3));
-        // Stopwords connus retirés.
         assert!(!tokens("les des dans").iter().any(|t| t == "les"));
     }
 }

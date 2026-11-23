@@ -1,11 +1,7 @@
-//! Parsing MIME et extraction du corps / pièces jointes.
-//! Utilise `mail-parser` pour extraire texte, HTML et métadonnées des pièces jointes.
-
 use crate::email::error::EmailError;
 use crate::email::types::{AttachmentMeta, EmailMessage, EmailSummary};
 use mail_parser::{Message as MailMessage, MessageParser, MimeHeaders};
 
-/// Parse un email brut (octets) et retourne une `EmailMessage`.
 pub fn parse_email(raw: &[u8]) -> Result<EmailMessage, EmailError> {
     let parsed = MessageParser::default()
         .parse(raw)
@@ -27,8 +23,8 @@ pub fn parse_email(raw: &[u8]) -> Result<EmailMessage, EmailError> {
 }
 
 fn extract_summary(msg: &MailMessage) -> EmailSummary {
-    let uid = 0; // UID assigné par l'IMAP, pas par le parser
-    let mailbox = String::new(); // Assigné par l'IMAP
+    let uid = 0;
+    let mailbox = String::new();
     let subject = msg.subject().map(|s| s.to_string());
     let from = msg
         .from()
@@ -44,7 +40,7 @@ fn extract_summary(msg: &MailMessage) -> EmailSummary {
         })
         .unwrap_or_default();
     let date = msg.date().map(|d| d.to_string());
-    let flags = Vec::new(); // Flags assignés par l'IMAP
+    let flags = Vec::new();
     let snippet = msg.body_text(0).map(|s| s.chars().take(200).collect());
 
     EmailSummary {
@@ -170,7 +166,6 @@ mod tests {
         assert_eq!(msg.summary.to, vec!["bob@example.com".to_string()]);
         assert!(msg.text_body.is_some());
         assert!(msg.text_body.unwrap().contains("Bonjour Bob"));
-        // mail-parser peut retourner du HTML dérivé du texte
         assert!(msg.attachments.is_empty());
     }
 
@@ -190,7 +185,6 @@ mod tests {
         assert_eq!(msg.attachments.len(), 1);
         let att = &msg.attachments[0];
         assert_eq!(att.filename, Some("test.bin".to_string()));
-        // mail-parser peut retourner le type MIME complet ou juste le type
         assert!(att.mime_type.as_ref().unwrap().contains("application"));
         assert!(att.size.unwrap() > 0);
     }
@@ -198,6 +192,6 @@ mod tests {
     #[test]
     fn test_parse_invalid_email() {
         let result = parse_email(b"not an email");
-        assert!(result.is_ok()); // mail-parser est tolérant
+        assert!(result.is_ok());
     }
 }

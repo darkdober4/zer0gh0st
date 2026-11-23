@@ -1,17 +1,9 @@
-//! Arbre des commandes de la palette `/` (et `F2`).
-//!
-//! Le panneau « Commandes » cliquable a été retiré (v0.7.32) : ce fichier ne
-//! sert plus qu'à produire la liste plate utilisée par la palette, avec les
-//! libellés groupés (« Contexte · /compact »).
-
 pub struct Node {
     pub label: &'static str,
-    /// Commande exécutée/insérée. `None` = groupe (a des enfants).
     pub run: Option<&'static str>,
     pub children: &'static [Node],
 }
 
-/// Liste plate des commandes (commande, « groupe · libellé ») pour la palette `/`.
 pub fn flat_commands() -> Vec<(String, String)> {
     fn walk(nodes: &'static [Node], group: Option<&str>, out: &mut Vec<(String, String)>) {
         for node in nodes {
@@ -47,7 +39,6 @@ const fn g(label: &'static str, children: &'static [Node]) -> Node {
     }
 }
 
-/// Arbre complet des commandes. Un `run` finissant par un espace attend un argument.
 pub const TREE: &[Node] = &[
     n("help", "/help"),
     n("tools", "/tools"),
@@ -74,7 +65,6 @@ pub const TREE: &[Node] = &[
     n("login", "/login"),
     n("zer0_mail", "/zer0_mail"),
     n("logout", "/logout"),
-    // Visibles directement (sans déplier le groupe « model »).
     n("model use", "/model use "),
     n("free", "/free"),
     n("quota", "/quota"),
@@ -253,9 +243,6 @@ pub const TREE: &[Node] = &[
 mod tests {
     use super::*;
 
-    /// Anti-dérive : toute commande gérée dans `mod.rs` doit être dans le menu.
-    /// C'est ce test qui aurait empêché `/codeexec` et `/readwrite` d'être
-    /// invisibles alors qu'ils arment les outils dangereux.
     #[test]
     fn every_tui_command_appears_in_the_menu() {
         fn flatten(nodes: &[Node], out: &mut Vec<String>) {
@@ -300,14 +287,11 @@ mod tests {
         assert!(cmds.len() > 10, "palette trop pauvre : {}", cmds.len());
         assert!(cmds.iter().any(|(c, _)| c == "/model"));
         assert!(cmds.iter().any(|(c, _)| c == "/provider"));
-        // présentes en direct dans le menu défilable
         assert!(cmds.iter().any(|(c, _)| c == "/model use "));
         assert!(cmds.iter().any(|(c, _)| c == "/free"));
-        // les sous-commandes portent le groupe dans le libellé
         assert!(cmds
             .iter()
             .any(|(c, l)| c == "/role off" && l.contains('·')));
-        // pas de doublon de commande
         let mut codes: Vec<&String> = cmds.iter().map(|(c, _)| c).collect();
         codes.sort();
         let before = codes.len();

@@ -7,22 +7,9 @@ use crate::route::{self, Endpoint};
 use crate::tools::{self, ToolSpec};
 
 pub(crate) const MAX_ITERATIONS: usize = 8;
-/// Hard ceiling on tool calls within a single turn.
 pub(crate) const MAX_TOOL_CALLS: usize = 24;
-/// Reprises automatiques après une réponse tronquée (`finish_reason = length`).
 const MAX_CONTINUATIONS: u32 = 4;
 
-/// Run one user turn over an ordered endpoint chain.
-///
-/// The first model call fails over across endpoints (setup failures only),
-/// with exponential backoff on HTTP 429. Once an endpoint answers, the rest
-/// of the turn sticks to it.
-/// Une erreur de *setup* justifie-t-elle de basculer vers l'endpoint suivant ?
-///
-/// Oui pour le réseau et les statuts qui peuvent dépendre du provider
-/// (clé, crédit, accès, modèle, indisponibilité). Non pour une erreur
-/// **déterministe** (400/422) — sauf si elle parle d'outils, auquel cas un autre
-/// modèle peut les supporter.
 fn should_failover(status: Option<u16>, err: &str) -> bool {
     match status {
         None => true,
@@ -36,7 +23,6 @@ fn should_failover(status: Option<u16>, err: &str) -> bool {
     }
 }
 
-/// Message final quand aucun endpoint n'a répond, jamais vide.
 fn failure_message(last_err: &str, skipped: &[String]) -> String {
     if !last_err.trim().is_empty() {
         return format!("tous les endpoints ont échoué — dernier : {last_err}");
@@ -51,11 +37,6 @@ fn failure_message(last_err: &str, skipped: &[String]) -> String {
     )
 }
 
-/// Copie des messages envoyée au provider : les blocs ```diff``` y sont
-/// plafonnés à `diff::MODEL_MAX_LINES`.
-///
-/// La conversation garde le diff complet (l'utilisateur le lit, replié ou non) ;
-/// le modèle, lui, n'a pas besoin de relire ce qu'il vient d'écrire.
 fn wire_messages(
     messages: &[crate::agent::history::ChatMessage],
 ) -> Vec<crate::agent::history::ChatMessage> {
@@ -84,10 +65,6 @@ pub async fn run_turn(
     options: ChatOptions,
     ui: UnboundedSender<UiEvent>,
 ) {
-    // B5 : le drapeau d'annulation n'est remis à zéro QUE pour un tour de haut
-    // niveau (TUI / CLI / Telegram). Il était auparavant dans
-    // `run_turn_budgeted`, donc chaque tour de sous-agent 0box l'effaçait :
-    // un `/stop` posé pendant le tour N était annulé au démarrage du tour N+1.
     crate::cancel::clear();
     run_turn_budgeted(
         endpoints,
@@ -102,11 +79,6 @@ pub async fn run_turn(
     .await
 }
 
-/// Comme `run_turn`, mais avec un budget d'endiguement explicite. Le débat 0box
-/// (MAIN exécute un plan multi-étapes : vérifier + créer + marquer) a montré que
-/// le budget par défaut (8 itérations) ne laisse même pas place aux `task_update`
-/// après vérification des livrables — les tours 0box passent donc un budget élargi,
-/// toujours borné (principe d'endiguement respecté : jamais illimité).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_turn_budgeted(
     endpoints: Vec<Endpoint>,
@@ -128,8 +100,6 @@ pub async fn run_turn_budgeted(
         return;
     }
 
-    // Les modèles `:free` ont un quota de requêtes serré : un tour ne doit pas
-    // consommer 8 appels. On plafonne à 4 itérations.
     let free_chain = endpoints.iter().any(|e| e.model.contains(":free"));
     let max_iterations = if free_chain {
         max_iterations.min(4)
@@ -137,11 +107,8 @@ pub async fn run_turn_budgeted(
         max_iterations
     };
 
-    // Budget partagé par tous les appels LLM de ce tour, sous-agents `0box`
-    // compris. Le compteur n'est remis à zéro qu'au premier niveau.
     let _budget = crate::budget::TurnGuard::enter();
 
-    // --- first call, with failover across the ordered chain ---
     let mut chosen: Option<(
         ApiClient,
         String,
@@ -149,8 +116,6 @@ pub async fn run_turn_budgeted(
         Option<String>,
     )> = None;
     let mut last_err = String::new();
-    // Endpoints sautés parce qu'ils sont marqués en échec récent : sans cette
-    // liste, si TOUS sont sautés, le message final était vide.
     let mut skipped: Vec<String> = Vec::new();
 
     'endpoints: for ep in endpoints.iter() {
@@ -176,7 +141,6 @@ pub async fn run_turn_budgeted(
         };
         match response {
             Ok((content, calls, _)) if content.trim().is_empty() && calls.is_empty() => {
-                // Model produced nothing usable (e.g. reasoning-only) → fail over.
                 route::mark_failed(&ep.label);
                 let _ = ui.send(UiEvent::Info(format!(
                     "⚠ {} a renvoyé une réponse vide → endpoint suivant",
@@ -192,8 +156,6 @@ pub async fn run_turn_budgeted(
                 break 'endpoints;
             }
             Err(ChatError::Setup { err, status }) => {
-                // Un 429 sur un modèle gratuit est un plafond de compte : la
-                // chaîne de bascule est faite des mêmes modèles `:free`.
                 if status == Some(429) && ep.model.contains(":free") {
                     route::mark_failed(&ep.label);
                     let _ = ui.send(UiEvent::Error(format!(
@@ -203,10 +165,6 @@ pub async fn run_turn_budgeted(
                     )));
                     return;
                 }
-                // Le backoff 429 est fait **une seule fois**, dans le client
-                // (`llm::llama`, qui honore `Retry-After`). Ici, un 429 signifie
-                // donc « essais épuisés » : on bascule d'endpoint au lieu
-                // d'empiler un second backoff.
                 route::mark_failed(&ep.label);
                 let hint = match status {
                     Some(401) => " — clé API invalide ou absente",
@@ -216,9 +174,6 @@ pub async fn run_turn_budgeted(
                     _ => "",
                 };
                 if !should_failover(status, &err.to_string()) {
-                    // Erreur déterministe : elle se reproduira à l'identique sur
-                    // tous les endpoints. Basculer ne ferait que consommer du
-                    // quota et du temps.
                     let _ = ui.send(UiEvent::Error(format!(
                         "{} : erreur déterministe{hint} ({err}) — pas de bascule",
                         ep.label
@@ -233,8 +188,6 @@ pub async fn run_turn_budgeted(
                 continue 'endpoints;
             }
             Err(ChatError::Quota { detail }) => {
-                // Quota de compte : basculer vers un autre `:free` ne rend pas
-                // de quota, et réessayer ne fait que retarder le message.
                 route::mark_failed(&ep.label);
                 let _ = ui.send(UiEvent::Error(format!(
                     "quota épuisé sur {} — {detail}\n\
@@ -262,17 +215,12 @@ pub async fn run_turn_budgeted(
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut total_calls: usize = 0;
     let mut continuations: u32 = 0;
-    // `true` tant qu'aucune réponse finale en texte n'a été produite. Si la
-    // boucle s'arrête (budget, itérations, boucle détectée), on force une
-    // dernière génération SANS outils : l'utilisateur ne doit jamais avoir à
-    // appuyer sur F7 pour obtenir une synthèse.
     let mut need_final = true;
     let mut cancelled = false;
     let mut stop_reason: Option<String> = None;
 
     for _ in 0..max_iterations {
         let assistant = if options.tools_mode == ToolsMode::Prompt && !calls.is_empty() {
-            // Sans API `tools`, on garde la trace de l'appel dans le texte.
             let mut text = content.clone();
             for c in &calls {
                 text.push_str(&format!(
@@ -287,8 +235,6 @@ pub async fn run_turn_budgeted(
         messages.push(assistant.clone());
 
         if calls.is_empty() {
-            // Réponse tronquée (limite de tokens) → on REPREND automatiquement
-            // au lieu de laisser l'utilisateur appuyer sur F7.
             if finish.as_deref() == Some("length") && continuations < MAX_CONTINUATIONS {
                 continuations += 1;
                 messages.push(ChatMessage::user(
@@ -329,7 +275,6 @@ pub async fn run_turn_budgeted(
                 cancelled = true;
                 break;
             }
-            // Loop containment: repeated identical calls or a global budget.
             total_calls += 1;
             let fp = format!("{}|{}", call.function.name, call.function.arguments);
             let n = seen.entry(fp).or_insert(0);
@@ -354,12 +299,9 @@ pub async fn run_turn_budgeted(
                 name: call.function.name.clone(),
                 args: call.function.arguments.clone(),
             });
-            // `execute_boxed` (effacement de type) : casse le cycle de types
-            // async (l'outil `0box` → débat → sous-agent → outils → …).
             let result = tools::execute_boxed(&call.function.name, &call.function.arguments).await;
             let _ = ui.send(UiEvent::ToolResult(result.clone()));
             let tool_msg = if options.tools_mode == ToolsMode::Prompt {
-                // Pas de rôle `tool` sans `tool_calls` : on répond en `user`.
                 ChatMessage::user(format!(
                     "Résultat de l'outil `{}` :\n{}",
                     call.function.name, result
@@ -368,21 +310,16 @@ pub async fn run_turn_budgeted(
                 ChatMessage::tool_result(call.id.clone(), result)
             };
             messages.push(tool_msg);
-            // Ne jamais relancer le modèle ou un autre outil après un arrêt,
-            // y compris quand le dernier outil vient juste de se terminer.
             if crate::cancel::is_cancelled() {
                 cancelled = true;
                 break;
             }
         }
 
-        // Budget/boucle/annulation : on ne relance pas le modèle avec des
-        // outils, on passe à la réponse finale.
         if cancelled || stop_reason.is_some() {
             break;
         }
 
-        // Subsequent calls stay on the chosen endpoint, but remain interruptible.
         let wire = wire_messages(&messages);
         let response = tokio::select! {
             biased;
@@ -406,9 +343,6 @@ pub async fn run_turn_budgeted(
         }
     }
 
-    // Réponse finale forcée : sans elle, un tour qui a consommé son budget
-    // d'outils se terminerait sur un outil, sans synthèse (l'utilisateur
-    // devait taper F7 à répétition).
     if need_final && !cancelled {
         let why = stop_reason.unwrap_or_else(|| "limite d'itérations".into());
         let _ = ui.send(UiEvent::Info(format!(
@@ -448,7 +382,6 @@ mod tests {
 
     #[test]
     fn wire_copy_caps_diffs_but_the_conversation_keeps_them() {
-        // 20 lignes de diff dans le message d'outil.
         let mut body =
             String::from("Fichier écrit: /tmp/x.rs (+20 / -0)\n```diff\n@@ -0,0 +1,20 @@\n");
         for i in 1..=20 {
@@ -462,8 +395,6 @@ mod tests {
 
         let wire = wire_messages(&msgs);
         let sent = wire[0].content.as_deref().unwrap();
-        // Lignes de contenu du bloc : l'en-tête `@@` compte, pas les fences ni la
-        // ligne « … omises ».
         let kept = sent
             .lines()
             .filter(|l| l.starts_with("@@") || l.starts_with("+ "))
@@ -479,7 +410,6 @@ mod tests {
             "ligne au-delà du plafond envoyée : {sent}"
         );
 
-        // La conversation d'origine n'est pas touchée : 20 lignes visibles.
         let shown = msgs[0].content.as_deref().unwrap();
         assert_eq!(shown.lines().filter(|l| l.starts_with("+ ")).count(), 20);
         assert_eq!(shown, body);
@@ -509,16 +439,12 @@ mod tests {
 
     #[test]
     fn failover_is_selective() {
-        // réseau : on bascule
         assert!(should_failover(None, "connexion refusée"));
-        // dépend du provider : on bascule
         for s in [401u16, 402, 403, 404, 408, 409, 429, 500, 502, 503] {
             assert!(should_failover(Some(s), "n'importe quoi"), "statut {s}");
         }
-        // déterministe : on ne bascule pas
         assert!(!should_failover(Some(400), "invalid request: bad json"));
         assert!(!should_failover(Some(422), "unprocessable entity"));
-        // … sauf si un autre modèle peut supporter les outils
         assert!(should_failover(Some(400), "model does not support tools"));
         assert!(should_failover(Some(400), "function calling unsupported"));
     }

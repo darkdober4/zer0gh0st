@@ -1,38 +1,18 @@
-//! `/zer0push` — tests, push, pull request.
-//!
-//! Enchaîne, dans l'ordre : vérifications git → tests (`cargo test`) →
-//! `git push -u` → `gh pr create`. Garde-fous : jamais de `--force`, jamais
-//! de push direct sur `main`/`master` sans `--allow-main`, arbre sale refusé
-//! sauf `--commit` (commit explicite, jamais de `git add -A` aveugle).
-//!
-//! Logique pure (`parse_args`, `validate`) séparée de l'exécution
-//! (`run`) : testable sans réseau ni dépôt.
-
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{anyhow, Result};
 
-/// Options parsées de `/zer0push` (et de `zer0 zer0push`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushOptions {
-    /// Titre de la PR (défaut : branche courante).
     pub title: Option<String>,
-    /// Corps de la PR.
     pub body: Option<String>,
-    /// Branche de base (défaut : branche par défaut du remote, sinon `main`).
     pub base: Option<String>,
-    /// PR en brouillon.
     pub draft: bool,
-    /// Ne pas lancer les tests avant le push.
     pub no_tests: bool,
-    /// Afficher le plan sans rien exécuter.
     pub dry_run: bool,
-    /// Committer l'arbre sale avant le push (message = titre ou défaut).
     pub commit: bool,
-    /// Autoriser le push sur `main`/`master` (déconseillé).
     pub allow_main: bool,
-    /// Remote à utiliser (défaut : `origin`).
     pub remote: String,
 }
 
@@ -56,7 +36,6 @@ const USAGE: &str =
     "usage: zer0push [titre…] [--base <branche>] [--body <texte>] [--remote <nom>] \
 [--draft] [--no-tests] [--commit] [--allow-main] [--dry-run]";
 
-/// Parse les arguments (même syntaxe en TUI `/zer0push …` et CLI `zer0 zer0push …`).
 pub fn parse_args(args: &[&str]) -> Result<PushOptions> {
     let mut o = PushOptions::default();
     let mut title: Vec<&str> = Vec::new();
@@ -122,12 +101,10 @@ pub fn parse_args(args: &[&str]) -> Result<PushOptions> {
     Ok(o)
 }
 
-/// Branches sur lesquelles on refuse le push direct sans `--allow-main`.
 pub fn is_protected(branch: &str) -> bool {
     matches!(branch.trim(), "main" | "master")
 }
 
-/// Valide l'état du dépôt avant toute action (fonction pure sur les faits).
 pub fn validate(branch: &str, dirty: usize, opts: &PushOptions) -> Result<()> {
     if branch.trim().is_empty() {
         return Err(anyhow!("branche courante introuvable (HEAD détaché ?)"));
@@ -146,12 +123,10 @@ pub fn validate(branch: &str, dirty: usize, opts: &PushOptions) -> Result<()> {
     Ok(())
 }
 
-/// Résultat d'une exécution (lignes à afficher, succès global).
 #[derive(Debug, Clone)]
 pub struct PushReport {
     pub lines: Vec<String>,
     pub ok: bool,
-    /// URL de la PR si créée.
     pub pr_url: Option<String>,
 }
 
@@ -190,12 +165,10 @@ fn run_cmd(root: &Path, prog: &str, args: &[&str]) -> Result<String> {
     }
 }
 
-/// Exécute le pipeline complet. `root` = racine du dépôt (défaut : projet courant).
 pub fn run(opts: &PushOptions) -> Result<PushReport> {
     run_in(&crate::mods::project_root(), opts)
 }
 
-/// Variante testable avec une racine explicite.
 pub fn run_in(root: &Path, opts: &PushOptions) -> Result<PushReport> {
     let mut lines: Vec<String> = Vec::new();
     let mut pr_url: Option<String> = None;
@@ -254,7 +227,6 @@ pub fn run_in(root: &Path, opts: &PushOptions) -> Result<PushReport> {
         });
     }
 
-    // 1. Tests
     if !opts.no_tests {
         lines.push("🧪 cargo test…".to_string());
         match run_cmd(root, "cargo", &["test"]) {
@@ -279,12 +251,8 @@ pub fn run_in(root: &Path, opts: &PushOptions) -> Result<PushReport> {
         lines.push("⏭ tests sautés (--no-tests)".to_string());
     }
 
-    // 2. Commit éventuel
     if dirty > 0 && opts.commit {
         lines.push("📝 commit de l'arbre sale…".to_string());
-        // `git add -u` seul laisse les **nouveaux** fichiers hors du commit :
-        // c'est ce qui a produit une CI rouge (module absent du dépôt).
-        // On ajoute donc aussi les fichiers non suivis, en respectant .gitignore.
         git(root, &["add", "-u"])?;
         let untracked = git(root, &["ls-files", "--others", "--exclude-standard"])?;
         let new_files: Vec<&str> = untracked
@@ -302,7 +270,6 @@ pub fn run_in(root: &Path, opts: &PushOptions) -> Result<PushReport> {
         lines.push("✅ commité".to_string());
     }
 
-    // 3. Push (jamais --force)
     lines.push(format!("⬆ git push -u {} {branch}…", opts.remote));
     match git(root, &["push", "-u", &opts.remote, &branch]) {
         Ok(out) => {
@@ -321,7 +288,6 @@ pub fn run_in(root: &Path, opts: &PushOptions) -> Result<PushReport> {
         }
     }
 
-    // 4. PR via gh
     lines.push("🔀 création de la PR…".to_string());
     let mut gh_args: Vec<String> = vec![
         "pr".into(),
@@ -424,7 +390,6 @@ mod tests {
 
     #[test]
     fn dry_run_on_temp_repo() {
-        // Dépôt git temporaire minimal : Cargo.toml + .git, branche feature.
         let dir: PathBuf =
             std::env::temp_dir().join(format!("zer0push-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

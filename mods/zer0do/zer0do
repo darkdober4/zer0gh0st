@@ -1,28 +1,8 @@
-#!/usr/bin/env bash
-# zer0do — mod « appareils du réseau » pour ZER0|GH0ST (commande `/0do`).
-#
-# PÉRIMÈTRE ASSUMÉ (v1) — lire avant d'utiliser :
-#   • découverte  : sondage du port 8060 (Roku ECP) sur VOTRE sous-réseau.
-#                   Aucun autre protocole n'est parlé : un téléviseur Samsung,
-#                   LG, Sony ou un Chromecast ne sera PAS piloté ici.
-#   • lecture     : modèle, nom, état d'alimentation (Roku).
-#   • actions     : touches Roku (Power, Home, VolumeUp…) — UNIQUEMENT sur les
-#                   adresses listées dans `.zer0/zer0do.allow`.
-#   • jamais      : appairage (Tizen/webOS), identifiants, scan hors du
-#                   sous-réseau local, écriture sur un appareil non listé.
-#
-# Ce que ce mod ne fait pas — et ne prétendra jamais faire :
-#   « réparer » un appareil. Il envoie des touches. Redémarrer un service d'un
-#   appareil exigerait SSH/telnet et des identifiants : hors périmètre.
-#
-# Dépendances : bash, curl. `avahi-browse` (optionnel) pour lister les
-# Chromecast, qui ne sont pas pilotés ici.
 
 set -u
 
 readonly PROG="zer0do"
-# Port ECP. Surchargeable pour les tests (`ZER0DO_ECP_PORT`), pas pour changer
-# de protocole : 8060 est le seul que le Roku expose.
+
 ECP_PORT="${ZER0DO_ECP_PORT:-8060}"
 readonly TIMEOUT_CONNECT=1
 readonly ALLOW_FILE=".zer0/zer0do.allow"
@@ -74,7 +54,6 @@ EOF
 
 need_curl() { command -v curl >/dev/null 2>&1 || die "curl est requis"; }
 
-# Sous-réseau local (/24 au plus), déduit de la première interface globale.
 detect_subnet() {
     local cidr
     cidr=$(ip -o -4 addr show scope global 2>/dev/null \
@@ -83,7 +62,7 @@ detect_subnet() {
         cidr=$(ifconfig 2>/dev/null \
             | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
         [ -n "${cidr:-}" ] || return 1
-        # ifconfig ne donne pas le préfixe : on suppose /24.
+
         cidr="${cidr}/24"
     fi
     local ip="${cidr%/*}" prefix="${cidr#*/}"
@@ -91,7 +70,6 @@ detect_subnet() {
     printf '%s\n' "${ip%.*}"
 }
 
-# Lit une valeur XML d'une réponse Roku (échappe les caractères problématiques).
 xml_field() {
     printf '%s' "$1" \
         | tr -d '\r\n' \
@@ -99,8 +77,6 @@ xml_field() {
         | head -n 1
 }
 
-# MAC utile pour le Wake-on-LAN : celle de l'interface réellement active.
-# `<network-type>` vaut `ethernet` ou `wifi` ; on retombe sur l'autre si vide.
 pick_mac() {
     local info="$1" kind eth wifi
     kind=$(xml_field "$info" network-type)
@@ -133,7 +109,7 @@ cmd_scan() {
         esac
     done
     if [ -n "$subnet" ]; then
-        # `192.168.40.0/24` ou `192.168.40.23` → préfixe `192.168.40`.
+
         subnet="${subnet%%/*}"
         subnet="${subnet%.*}"
     else
@@ -145,20 +121,17 @@ cmd_scan() {
 
     printf 'Sondage de %s.0/24 sur le port %s (Roku ECP)…\n' "$subnet" "$ECP_PORT"
     local found=0
-    # Sondage en parallèle, borné : 24 connexions simultanées, 2 s chacune.
+
     local ips=""
     local i
     for i in $(seq 1 254); do ips="$ips $subnet.$i"; done
-    # Les réponses sont **conservées** : une seule requête par appareil. Sans ça,
-    # la seconde lecture (pour les champs) pouvait tomber sur une TV en veille
-    # réseau et afficher « (inconnu) » alors que l'appareil venait de répondre.
+
     local tmp
     tmp=$(mktemp -d 2>/dev/null) || die "impossible de créer un dossier temporaire"
     trap 'rm -rf "$tmp"' EXIT
-    # shellcheck disable=SC2086
+
     local alive
-    # On exige une vraie réponse ECP (`<device-info>`) : un port 8060 ouvert par
-    # autre chose ne doit pas être annoncé comme un Roku.
+
     alive=$(printf '%s\n' $ips | ECP_PORT="$ECP_PORT" TMP_DO="$tmp" xargs -P 24 -I{} sh -c \
         'curl -s -m 2 "http://{}:$ECP_PORT/query/device-info" -o "$TMP_DO/{}.xml" 2>/dev/null;
          grep -q "<device-info>" "$TMP_DO/{}.xml" 2>/dev/null && echo {}' 2>/dev/null)
@@ -191,8 +164,6 @@ cmd_scan() {
     printf '\n%d appareil(s) Roku. Actions : `%s key <ip> <TOUCHE>` (allowlist requise).\n' \
         "$found" "$PROG"
 
-    # La MAC affichée est celle de l'interface active : c'est elle qu'il faut pour
-    # rallumer par Wake-on-LAN. On donne la ligne d'allowlist prête à coller.
     if [ -n "$macs" ]; then
         printf '\nPour autoriser le réveil (Wake-on-LAN), ajoute dans %s :\n' "$ALLOW_FILE"
         printf "$macs" | while read -r ip mac; do
@@ -200,7 +171,6 @@ cmd_scan() {
         done
     fi
 
-    # Bonus lecture seule : Chromecast visibles en mDNS (non pilotés).
     if command -v avahi-browse >/dev/null 2>&1; then
         local cast
         cast=$(timeout 3 avahi-browse -rtp _googlecast._tcp 2>/dev/null \
@@ -231,8 +201,7 @@ cmd_status() {
     printf '  alimentation: %s\n' "$(xml_field "$info" power-mode)"
     printf '  réseau     : %s\n' "$(xml_field "$info" network-type)"
     printf '  MAC        : %s  (Wake-on-LAN)\n' "$(pick_mac "$info")"
-    # L'id de l'application est ce qu'attend `launch <ip> <id>` : on l'affiche
-    # ici pour éviter d'enchaîner `active` puis `apps` pour le retrouver.
+
     local line id name
     line=$(active_app "$ip" 2>/dev/null)
     if [ -n "$line" ]; then
@@ -244,7 +213,6 @@ cmd_status() {
     fi
 }
 
-# L'adresse est-elle autorisée pour une action ?
 allowed() {
     local ip="$1"
     if [ -n "${ZER0DO_ALLOW:-}" ]; then
@@ -256,7 +224,6 @@ allowed() {
     [ "$(allow_field "$ip" 1)" = "$ip" ]
 }
 
-# Champ `n` de la ligne d'allowlist qui commence par `ip` (1 = IP, 2 = MAC).
 allow_field() {
     local ip="$1" field="$2"
     [ -f "$ALLOW_FILE" ] || return 1
@@ -315,9 +282,6 @@ utilise « $PROG search <ip> <texte> », qui passe par la recherche du Roku." ;;
     fi
 }
 
-# Wake-on-LAN : 6 octets 0xFF + 16 fois la MAC, en UDP broadcast (port 9).
-# Fonctionne si l'appareil garde sa carte réseau alimentée en veille — sur un
-# Roku TV, cela correspond à « Fast TV start » activé.
 cmd_wake() {
     local ip="" dry=0
     while [ $# -gt 0 ]; do
@@ -330,8 +294,7 @@ cmd_wake() {
     require_allowed "$ip"
     local mac
     mac=$(mac_for "$ip")
-    # Si l'appareil répond, sa propre MAC fait foi : une allowlist qui contient
-    # la MAC Wi-Fi d'un appareil branché en Ethernet ne le réveillera jamais.
+
     local info reported
     info=$(roku_info "$ip")
     reported=$(pick_mac "$info")
@@ -355,7 +318,6 @@ La MAC se trouve dans l'interface du téléviseur (Réglages → À propos du r�
         *) die "MAC invalide pour $ip : $mac (format AA:BB:CC:DD:EE:FF)" ;;
     esac
 
-    # Paquet magique en hexadécimal : 6 × ff puis 16 × mac.
     local machex="${mac//:/}"
     local packet="ffffffffffff"
     local i
@@ -377,10 +339,7 @@ La MAC se trouve dans l'interface du téléviseur (Réglages → À propos du r�
     printf 'Wake-on-LAN → %s (MAC %s), paquet de %d octets\n' \
         "$ip" "$mac" $((6 + 16 * 6))
     local dest out=0
-    # Broadcast + unicast. `bash` ne sait pas mettre SO_BROADCAST : l'envoi en
-    # 255.255.255.255 échoue en EACCES (« connect: Permission denied ») alors
-    # que `printf` renvoie 0 — d'où la capture de stderr, sans quoi on annonçait
-    # « envoyé » pour un paquet jamais parti.
+
     for dest in "255.255.255.255" "$ip"; do
         local err=""
         if command -v socat >/dev/null 2>&1; then
@@ -413,9 +372,7 @@ cmd_power() {
     local ip="$1" mode="$2"
     shift 2
     need_curl
-    # L'état réel d'abord : sans ça, « power on » sur une TV déjà allumée
-    # l'éteindrait (la touche Power est une bascule), et « power off » sur une TV
-    # éteinte ne ferait rien en prétendant le contraire.
+
     local info pm
     info=$(roku_info "$ip")
     pm=$(xml_field "$info" power-mode)
@@ -426,15 +383,14 @@ cmd_power() {
                     printf '%s : déjà allumée (%s). Rien envoyé.\n' "$ip" "$pm"
                     return 0
                 fi
-                # L'appareil garde son réseau en veille : la touche Power le
-                # réveille (constaté sur Roku TV, DisplayOff → PowerOn).
+
                 require_allowed "$ip"
                 printf '%s : état %s → réveil par ECP (touche Power).\n' \
                     "$ip" "${pm:-inconnu}"
                 cmd_key "$ip" Power
                 return $?
             fi
-            # Aucune réponse : il est vraiment éteint, seul Wake-on-LAN peut agir.
+
             printf '%s ne répond pas en ECP → tentative Wake-on-LAN.\n' "$ip"
             cmd_wake "$ip" "$@"
             ;;
@@ -450,8 +406,6 @@ cmd_power() {
     esac
 }
 
-# Encode une chaîne pour une query string (curl --data-urlencode n'est pas
-# disponible en GET + POST simultanément ; on encode ici, simplement).
 urlencode() {
     printf '%s' "$1" | od -An -tu1 | tr -s ' ' '\n' \
         | awk 'BEGIN{ORS=""} {
@@ -462,7 +416,6 @@ urlencode() {
         }'
 }
 
-# Champs du XML des applications : `id<TAB>nom`.
 roku_apps() {
     local ip="$1" xml
     xml=$(curl -s -m 3 "http://$ip:$ECP_PORT/query/apps" 2>/dev/null) || return 1
@@ -472,7 +425,6 @@ roku_apps() {
         | sed -n 's:.*<app id="\([^"]*\)"[^>]*>\([^<]*\)</app>.*:\1\t\2:p'
 }
 
-# Application au premier plan : `id<TAB>nom` (vide si écran d'accueil).
 active_app() {
     local ip="$1" xml
     xml=$(curl -s -m 3 "http://$ip:$ECP_PORT/query/active-app" 2>/dev/null) || return 1
@@ -521,12 +473,12 @@ cmd_launch() {
     local ip="$1" want="$2" id=""
     require_allowed "$ip"
     case "$want" in
-        *[!0-9]*)  # un nom : on le résout dans la liste des applications
+        *[!0-9]*)
             local list
             list=$(roku_apps "$ip") || die "$ip ne répond pas (pas un Roku, ou hors ligne)"
             id=$(printf '%s\n' "$list" | awk -F'\t' -v want="$want" \
                 'tolower($2) ~ tolower(want) {print $1; exit}')
-            # Pas de backticks ici : dans une chaîne double, bash les exécuterait.
+
             [ -n "$id" ] || die "application introuvable sur $ip : $want (voir : $PROG apps $ip)"
             ;;
         *) id="$want" ;;

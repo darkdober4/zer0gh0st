@@ -1,23 +1,5 @@
-//! Journal structuré minimal (JSON sur stderr).
-//!
-//! M4 : les erreurs de diagnostic étaient éparpillées en `eprintln!` libres —
-//! impossibles à filtrer, à parser ou à corréler. Ce module les remplace par un
-//! objet JSON par ligne, sur le modèle déjà utilisé par `zer0-gw`
-//! (`bin/zer0-gw.rs::log_line`).
-//!
-//! Choix : **pas de dépendance `tracing`**. Le besoin réel est « relire et
-//! filtrer six messages de diagnostic », pas d'instrumenter des spans async.
-//! Une soixantaine de lignes suffisent, et le binaire ne grossit pas.
-//!
-//! Niveau : `ZER0_LOG` = `off` | `error` | `warn` (défaut) | `info` | `debug`.
-//!
-//! **Ce module ne remplace pas les sorties CLI** : les messages destinés à
-//! l'utilisateur (`usage: …`, `⚠ coffre verrouillé`, progression d'un tour)
-//! restent des `eprintln!` lisibles. Ici, ce sont les diagnostics machine.
-
 use std::sync::atomic::{AtomicU8, Ordering};
 
-/// Gravité d'un événement. L'ordre est significatif : `Error < Warn < Info < Debug`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     Error = 0,
@@ -36,7 +18,6 @@ impl Level {
         }
     }
 
-    /// `None` = journalisation coupée (`off`).
     fn parse(s: &str) -> Option<Option<Level>> {
         match s.trim().to_ascii_lowercase().as_str() {
             "off" | "none" | "silent" => Some(None),
@@ -49,18 +30,12 @@ impl Level {
     }
 }
 
-/// Niveau courant. `OFF` = journalisation coupée.
-///
-/// Deux états distincts, longtemps confondus : « pas encore lu l'environnement »
-/// et « coupé ». Les mélanger faisait qu'un `set_level(None)` était aussitôt
-/// annulé par une relecture de `ZER0_LOG` — d'où le drapeau `INIT`.
 const OFF: u8 = u8::MAX;
 static LEVEL: AtomicU8 = AtomicU8::new(OFF);
 static INIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn current_level() -> Option<Level> {
     if !INIT.swap(true, Ordering::Relaxed) {
-        // Première utilisation : on lit l'environnement (défaut `warn`).
         let parsed = std::env::var("ZER0_LOG")
             .ok()
             .as_deref()
@@ -77,16 +52,11 @@ fn current_level() -> Option<Level> {
     }
 }
 
-/// Force le niveau (tests, ou `--log-level` d'un CLI).
 pub fn set_level(level: Option<Level>) {
     LEVEL.store(level.map_or(OFF, |l| l as u8), Ordering::Relaxed);
     INIT.store(true, Ordering::Relaxed);
 }
 
-/// Construit la ligne JSON (fonction pure, testable).
-///
-/// `fields` doit être un objet JSON ; les clés `ts`, `level` et `event` sont
-/// réservées et ne peuvent pas être écrasées par un champ.
 pub fn format_line(level: Level, event: &str, fields: &serde_json::Value) -> String {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -107,7 +77,6 @@ pub fn format_line(level: Level, event: &str, fields: &serde_json::Value) -> Str
     v.to_string()
 }
 
-/// Écrit un événement si son niveau passe le filtre. Ne panique jamais.
 pub fn log(level: Level, event: &str, fields: serde_json::Value) {
     let Some(max) = current_level() else {
         return;
@@ -118,7 +87,6 @@ pub fn log(level: Level, event: &str, fields: serde_json::Value) {
     eprintln!("{}", format_line(level, event, &fields));
 }
 
-/// Raccourci : `log_error("audit_write", json!({"error": e.to_string()}))`.
 pub fn log_error(event: &str, fields: serde_json::Value) {
     log(Level::Error, event, fields);
 }
@@ -146,7 +114,6 @@ mod tests {
         assert!(v["ts"].is_u64());
     }
 
-    /// Un champ utilisateur ne doit pas pouvoir usurper `level`/`event`/`ts`.
     #[test]
     fn format_line_refuses_to_override_reserved_keys() {
         let line = format_line(
@@ -166,7 +133,6 @@ mod tests {
         assert_eq!(Level::parse("off"), Some(None));
         assert_eq!(Level::parse("WARN"), Some(Some(Level::Warn)));
         assert_eq!(Level::parse(" debug "), Some(Some(Level::Debug)));
-        // Inconnu : on ne décide pas à la place de l'appelant.
         assert_eq!(Level::parse("bavard"), None);
     }
 
@@ -177,7 +143,6 @@ mod tests {
         assert!(Level::Info < Level::Debug);
     }
 
-    /// Le filtre doit couper ce qui est plus verbeux que le niveau courant.
     #[test]
     fn filter_drops_events_below_the_threshold() {
         set_level(Some(Level::Warn));
@@ -189,7 +154,6 @@ mod tests {
         set_level(None);
         assert!(current_level().is_none(), "off doit tout couper");
 
-        // Remise à l'état attendu par les autres tests.
         set_level(Some(Level::Warn));
     }
 }

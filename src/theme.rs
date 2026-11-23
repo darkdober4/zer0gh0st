@@ -1,40 +1,21 @@
-//! Thèmes de couleurs de la TUI.
-//!
-//! Un thème est un jeu de rôles de couleurs (fond, accent, texte, code…),
-//! plutôt qu'une liste de couleurs dispersées dans le code. Le thème actif est
-//! global et thread-safe : le rendu de la TUI et ses overlays le consultent sans
-//! avoir à transporter une palette dans chaque fonction.
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{anyhow, Result};
 use ratatui::style::Color;
 
-/// Style du banner principal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BannerStyle {
-    /// Dégradé arc-en-ciel animé (thème historique).
     Rainbow,
-    /// Dégradé gris, minimaliste.
     Mono,
-    /// Dégradé rouge, du bordeaux au rouge vif.
     Red,
-    /// Dégradé acier bleuté (thème castle / DOS).
     Steel,
-    /// Bloc 2D en relief : lettres pleines avec arête claire (haut/gauche) et
-    /// ombre (bas/droite), coloriées par bandes d'encres. Sur fond clair, la
-    /// couleur vient de la teinte, pas de la luminosité.
     Bevel,
 }
 
-/// Palette complète d'un thème.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Theme {
-    /// Identifiant stable, persisté dans la configuration.
     pub id: &'static str,
-    /// Nom affiché dans le sélecteur.
     pub label: &'static str,
-    /// Description courte affichée dans le sélecteur.
     pub description: &'static str,
     pub background: Color,
     pub accent: Color,
@@ -42,13 +23,9 @@ pub struct Theme {
     pub dim: Color,
     pub text: Color,
     pub code: Color,
-    /// Couleur des blocs d'outils (historiquement bleue).
     pub tool: Color,
     pub border: Color,
     pub highlight: Color,
-    /// Texte posé **sur** `highlight` (pastilles de raccourcis, pied de page).
-    /// `Black` convient aux thèmes dont la pastille est claire ; un thème à
-    /// pastille foncée doit mettre ici sa couleur de fond.
     pub chip_fg: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
@@ -58,18 +35,12 @@ pub struct Theme {
     pub warning: Color,
     pub danger: Color,
     pub banner: BannerStyle,
-    /// Pack de sons du thème (`""` = aucun son de thème).
     pub sound_pack: &'static str,
-    /// Glyphe du bouton « ouvrir le menu déroulant » (rail replié, à droite).
     pub rail_arrow: &'static str,
-    /// Le rail est-il une « poignée de tiroir » (ASCII, verticale) au lieu du
-    /// simple `◀☰` ?
     pub rail_drawer: bool,
-    /// Halo lumineux autour du glyphe du rail (effet néon).
     pub rail_glow: bool,
 }
 
-/// Thèmes disponibles. Le premier est le thème par défaut.
 pub const ALL: &[Theme] = &[
     Theme {
         id: "ghost",
@@ -148,8 +119,6 @@ pub const ALL: &[Theme] = &[
         danger: Color::Rgb(255, 60, 68),
         banner: BannerStyle::Red,
         sound_pack: "",
-        // Poignée de tiroir (ASCII : aucun glyphe exotique) pour tirer le menu.
-        // `>>` = le tiroir est rentré, on tire pour l'ouvrir.
         rail_arrow: ">>",
         rail_drawer: true,
         rail_glow: true,
@@ -185,25 +154,23 @@ pub const ALL: &[Theme] = &[
         id: "paper",
         label: "Paper",
         description: "feuille blanche, encres bleue/rouge/verte/noire — dessin industriel",
-        // Fond **forcé** : un thème clair sur le fond noir d'un autre terminal
-        // serait illisible. On peint le papier, on ne l'espère pas.
         background: Color::Rgb(250, 249, 245),
-        accent: Color::Rgb(31, 78, 140), // encre bleue (bleu de plan)
+        accent: Color::Rgb(31, 78, 140),
         panel: Color::Rgb(240, 239, 233),
-        dim: Color::Rgb(116, 114, 105), // crayon gris
-        text: Color::Rgb(27, 27, 31),   // encre noire
+        dim: Color::Rgb(116, 114, 105),
+        text: Color::Rgb(27, 27, 31),
         code: Color::Rgb(56, 56, 62),
-        tool: Color::Rgb(15, 106, 106), // bleu-vert de tire-ligne
-        border: Color::Rgb(74, 74, 69), // trait de construction
+        tool: Color::Rgb(15, 106, 106),
+        border: Color::Rgb(74, 74, 69),
         highlight: Color::Rgb(31, 78, 140),
-        chip_fg: Color::Rgb(250, 249, 245), // papier sur pastille encre
-        selection_bg: Color::Rgb(214, 228, 240), // lavis bleu clair
+        chip_fg: Color::Rgb(250, 249, 245),
+        selection_bg: Color::Rgb(214, 228, 240),
         selection_fg: Color::Rgb(16, 20, 24),
         menu_selection_bg: Color::Rgb(220, 231, 243),
         popup_bg: Color::Rgb(243, 242, 236),
-        success: Color::Rgb(30, 107, 58), // encre verte
-        warning: Color::Rgb(138, 90, 0),  // ocre (le jaune vif est illisible)
-        danger: Color::Rgb(166, 27, 27),  // encre rouge
+        success: Color::Rgb(30, 107, 58),
+        warning: Color::Rgb(138, 90, 0),
+        danger: Color::Rgb(166, 27, 27),
         banner: BannerStyle::Bevel,
         sound_pack: "",
         rail_arrow: "◀☰",
@@ -214,17 +181,14 @@ pub const ALL: &[Theme] = &[
 
 static ACTIVE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
-/// Verrou des tests qui changent le thème actif (état global partagé).
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Thème actuellement actif.
 pub fn active() -> Theme {
     let index = ACTIVE_INDEX.load(Ordering::Relaxed).min(ALL.len() - 1);
     ALL[index]
 }
 
-/// Normalise un nom et ses alias vers l'identifiant canonique.
 fn canonical_name(name: &str) -> String {
     let lowered = name.trim().to_lowercase().replace('&', "et");
     let normalized: String = lowered
@@ -242,7 +206,6 @@ fn canonical_name(name: &str) -> String {
     }
 }
 
-/// Résout un nom de thème sans modifier le thème actif.
 pub fn resolve(name: &str) -> Result<&'static Theme> {
     let canonical = canonical_name(name);
     ALL.iter()
@@ -258,7 +221,6 @@ pub fn resolve(name: &str) -> Result<&'static Theme> {
         })
 }
 
-/// Active un thème par son identifiant ou l'un de ses alias.
 pub fn activate(name: &str) -> Result<&'static Theme> {
     let selected = resolve(name)?;
     let index = ALL
@@ -269,8 +231,6 @@ pub fn activate(name: &str) -> Result<&'static Theme> {
     Ok(selected)
 }
 
-// Raccourcis de lecture : le rendu ne doit pas répéter `active().champ`.
-/// Couleur du texte posé sur une pastille `highlight` (pied de page).
 pub fn chip_fg() -> Color {
     active().chip_fg
 }
@@ -323,15 +283,12 @@ pub fn warning() -> Color {
 pub fn danger() -> Color {
     active().danger
 }
-/// Glyphe du bouton d'ouverture du menu (rail replié, à droite).
 pub fn rail_arrow() -> &'static str {
     active().rail_arrow
 }
-/// Le rail se dessine-t-il en « poignée de tiroir » ?
 pub fn rail_drawer() -> bool {
     active().rail_drawer
 }
-/// Le rail affiche-t-il un halo néon autour de son glyphe ?
 pub fn rail_glow() -> bool {
     active().rail_glow
 }
@@ -340,7 +297,6 @@ pub fn rail_glow() -> bool {
 mod contrast_tests {
     use super::*;
 
-    /// Couleur ANSI → RGB conventionnel (xterm). `Reset` reste non mesurable.
     fn to_rgb(c: Color) -> Option<(u8, u8, u8)> {
         Some(match c {
             Color::Rgb(r, g, b) => (r, g, b),
@@ -364,7 +320,6 @@ mod contrast_tests {
         })
     }
 
-    /// Luminance relative (WCAG 2.1).
     fn lum(c: Color) -> Option<f64> {
         let (r, g, b) = to_rgb(c)?;
         let f = |v: u8| {
@@ -384,12 +339,9 @@ mod contrast_tests {
         Some((hi + 0.05) / (lo + 0.05))
     }
 
-    /// Textes lisibles : au moins 4,5:1 (AA) sur le fond du thème.
     #[test]
     fn text_colors_are_readable_on_their_background() {
         for theme in ALL {
-            // `ghost` hérite du fond du terminal : on teste contre un fond
-            // sombre, ce qu'il suppose.
             let bg = match theme.background {
                 Color::Reset => Color::Rgb(16, 16, 20),
                 c => c,
@@ -408,8 +360,6 @@ mod contrast_tests {
                     theme.id
                 );
             }
-            // Les traits et le texte atténué peuvent être plus discrets,
-            // mais pas invisibles.
             for (role, color) in [
                 ("dim", theme.dim),
                 ("border", theme.border),
@@ -421,7 +371,6 @@ mod contrast_tests {
         }
     }
 
-    /// Le texte des pastilles doit trancher avec la pastille elle-même.
     #[test]
     fn chip_text_stands_out_on_its_chip() {
         for theme in ALL {
@@ -471,7 +420,6 @@ mod tests {
     #[test]
     fn noir_rouge_gets_a_neon_drawer_handle_on_the_rail() {
         let red = resolve("noir-rouge").unwrap();
-        // ASCII uniquement : les chevrons `▶` ne s'affichent pas partout.
         assert_eq!(red.rail_arrow, ">>");
         assert!(
             red.rail_drawer,

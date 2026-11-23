@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use lopdf::{dictionary, Document, Object, ObjectId};
 use std::collections::BTreeMap;
 
-/// Basic PDF info.
 pub fn info(path: &str) -> Result<String> {
     let doc = Document::load(path)?;
     let pages = doc.get_pages().len();
@@ -27,7 +26,6 @@ pub fn info(path: &str) -> Result<String> {
     Ok(s)
 }
 
-/// Extract text (uses pdf-extract).
 pub fn text(path: &str) -> Result<String> {
     let t = pdf_extract::extract_text(path)?;
     let t = t.trim();
@@ -38,7 +36,6 @@ pub fn text(path: &str) -> Result<String> {
     }
 }
 
-/// Split: keep pages `first..=last` into a new PDF.
 pub fn split(path: &str, output: &str, first: u32, last: u32) -> Result<String> {
     let mut doc = Document::load(path)?;
     let pages: Vec<u32> = doc.get_pages().keys().cloned().collect();
@@ -54,7 +51,6 @@ pub fn split(path: &str, output: &str, first: u32, last: u32) -> Result<String> 
     Ok(format!("Pages {first}-{last} extraites → {output}"))
 }
 
-/// Merge several PDFs into one.
 pub fn merge(inputs: &[String], output: &str) -> Result<String> {
     if inputs.len() < 2 {
         return Err(anyhow!("merge : au moins 2 fichiers requis"));
@@ -110,10 +106,6 @@ pub fn merge(inputs: &[String], output: &str) -> Result<String> {
     ))
 }
 
-/// Tronque `t` à `max` octets sans casser un caractère UTF-8.
-///
-/// Même classe que B2 : `&t[..max]` paniquait si `max` tombait au milieu d'un
-/// caractère accentué — cas courant sur un PDF français de plus de 20 000 octets.
 fn truncate_text(t: &str, max: usize) -> String {
     if t.len() <= max {
         return t.to_string();
@@ -133,7 +125,6 @@ mod tests {
 
     #[test]
     fn truncate_text_never_panics_on_multibyte() {
-        // 'é' = 2 octets : on fait tomber la coupe sur son 2e octet.
         for offset in 0..4 {
             let t = format!("{}é{}", "a".repeat(19_999 + offset), "b".repeat(10));
             let out = truncate_text(&t, 20_000);

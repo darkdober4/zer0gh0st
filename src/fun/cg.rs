@@ -1,18 +1,3 @@
-//! Mod « 0cg » : watchlist crypto dans le panneau latéral (comme `t0p`).
-//!
-//! Choix de conception :
-//! - **API publique sans clé** (`api.coingecko.com/api/v3`) : aucun secret à
-//!   stocker, et ça marche dès l'installation. Les endpoints payants
-//!   (historique long, WebSocket) ne sont pas utilisés.
-//! - **Une seule requête** pour toute la liste (`/coins/markets` renvoie prix,
-//!   variation 24 h **et** `sparkline_in_7d`), rafraîchie toutes les 15 s :
-//!   4 req/min, très en dessous des limites publiques.
-//! - **La watchlist appartient à l'utilisateur** : ordre conservé, ni tri par
-//!   capitalisation ni liste par défaut imposée. `/0cg add|rm|list`.
-//! - **Honnêteté** : le pied affiche l'âge des données ; un échec réseau est
-//!   affiché comme tel (`prix indisponibles depuis N s`), jamais masqué par des
-//!   valeurs figées présentées comme fraîches.
-
 use std::time::{Duration, Instant};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -25,35 +10,22 @@ use ratatui::Frame;
 
 use crate::theme;
 
-/// Intervalle de rafraîchissement par défaut (`ZER0_CG_SECS` pour changer).
 pub const DEFAULT_SECS: u64 = 15;
 
-/// Agent envoyé avec la requête.
-///
-/// **Requis** : sans `User-Agent`, l'API CoinGecko (derrière Cloudflare)
-/// répond **403 Forbidden** à un client rustls — curl passe, reqwest non. Le
-/// symptôme était un panneau vide avec « HTTP 403 » sans explication.
 pub const USER_AGENT: &str = concat!("zer0gh0st/", env!("CARGO_PKG_VERSION"));
 
-/// Au-delà de cette fraîcheur, les données sont dites **périmées**.
 const STALE_AFTER: Duration = Duration::from_secs(60);
 
-/// Une ligne de la watchlist.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Quote {
     pub id: String,
     pub symbol: String,
-    /// Prix en USD (0 si l'API n'en a pas donné).
     pub price: f64,
-    /// Variation 24 h en pourcent (`None` si absente).
     pub change_24h: Option<f64>,
-    /// Série 7 jours (168 points horaires), telle que fournie par l'API.
     pub spark: Vec<f64>,
 }
 
 impl Quote {
-    /// Prix lisible, avec **espace insécable** comme séparateur de milliers
-    /// (`64 947 $`, `0,5200 $`). La virgule décimale est française.
     pub fn price_label(&self) -> String {
         let s = if self.price >= 1000.0 {
             format!("{:.0}", self.price)
@@ -66,12 +38,11 @@ impl Quote {
             Some((a, b)) => (a.to_string(), Some(b.to_string())),
             None => (s.clone(), None),
         };
-        // Groupement des milliers par tranches de 3, depuis la droite.
         let mut grouped = String::new();
         let n = int_part.len();
         for (i, ch) in int_part.chars().enumerate() {
             if i > 0 && (n - i) % 3 == 0 {
-                grouped.push(' '); // séparateur de milliers (largeur 1)
+                grouped.push(' ');
             }
             grouped.push(ch);
         }
@@ -81,7 +52,6 @@ impl Quote {
         }
     }
 
-    /// Variation lisible : `+2,4 %` / `−1,1 %` (signe moins typographique).
     pub fn change_label(&self) -> String {
         match self.change_24h {
             None => "—".to_string(),
@@ -97,17 +67,12 @@ impl Quote {
     }
 }
 
-/// État du panneau.
 pub struct Cg {
-    /// Ids CoinGecko à suivre, **dans l'ordre choisi** par l'utilisateur.
     pub coins: Vec<String>,
     quotes: Vec<Quote>,
-    /// Dernière mise à jour réussie (None = jamais).
     last_ok: Option<Instant>,
     last_attempt: Option<Instant>,
-    /// Dernière erreur (affichée telle quelle, effacée au succès suivant).
     error: Option<String>,
-    /// Une requête est en vol.
     pub loading: bool,
     secs: u64,
 }
@@ -125,12 +90,6 @@ impl Cg {
         }
     }
 
-    /// Chargement bloquant (mode CLI/standalone, sans runtime async).
-    ///
-    /// On passe par `reqwest::blocking` : `tokio` tourne déjà (la boucle de la
-    // TUI est un runtime), et `block_on` imbriqué paniquerait — d'où ce client
-    /// dédié. Le mode TUI, lui, envoie sa requête dans une tâche `tokio` et
-    /// reçoit les devises par `UiEvent`.
     pub fn tick_standalone(&mut self) {
         if !self.due() {
             return;
@@ -170,13 +129,11 @@ impl Cg {
         &self.quotes
     }
 
-    /// La liste a changé : on oublie l'intervalle pour recharger tout de suite.
     pub fn reload(&mut self) {
         self.last_attempt = None;
         self.loading = false;
     }
 
-    /// Faut-il lancer une requête maintenant ? (intervalle + pas déjà en vol)
     pub fn due(&self) -> bool {
         if self.loading || self.coins.is_empty() {
             return false;
@@ -187,8 +144,6 @@ impl Cg {
         }
     }
 
-    /// Applique une réponse : les devises sont réordonnées selon `self.coins`
-    /// (l'API ne garantit pas l'ordre demandé).
     pub fn apply(&mut self, mut quotes: Vec<Quote>) {
         quotes.sort_by_key(|q| {
             self.coins
@@ -205,14 +160,12 @@ impl Cg {
         self.last_attempt = Some(Instant::now());
     }
 
-    /// Enregistre un échec et rend la main.
     pub fn fail(&mut self, msg: String) {
         self.error = Some(msg);
         self.loading = false;
         self.last_attempt = Some(Instant::now());
     }
 
-    /// Âge lisible de la dernière mise à jour réussie.
     pub fn age_label(&self) -> String {
         match self.last_ok {
             None => "jamais".to_string(),
@@ -235,11 +188,9 @@ impl Cg {
         }
     }
 
-    /// Grandeur du panneau : compact (1 rangée/actif) quand il y a beaucoup de
-    /// lignes ou peu de hauteur.
     fn compact(&self, area: Rect) -> bool {
         let n = self.coins.len().max(1) as u16;
-        let usable = area.height.saturating_sub(4); // cadre + en-tête + pied
+        let usable = area.height.saturating_sub(4);
         n.saturating_mul(3) > usable
     }
 
@@ -255,7 +206,7 @@ impl Cg {
         }
 
         let compact = self.compact(inner);
-        let rows = (inner.height as usize).saturating_sub(2); // en-tête + pied
+        let rows = (inner.height as usize).saturating_sub(2);
         let per: u16 = if compact { 1 } else { 3 };
         let visible = (rows / per as usize).max(1);
 
@@ -289,10 +240,7 @@ impl Cg {
             self.draw_quote(f, q, Rect::new(inner.x, top, inner.width, per), compact);
         }
 
-        // Pied : fraîcheur **ou** panne, jamais un succès silencieux.
         let footer = if let Some(e) = &self.error {
-            // Avant un premier succès, « depuis jamais » ne veut rien dire :
-            // on distingue les deux cas.
             let msg = if self.last_ok.is_some() {
                 format!(" ! prix indisponibles depuis {} ({e})", self.age_label())
             } else {
@@ -330,15 +278,11 @@ impl Cg {
         if area.width < 4 || area.height == 0 {
             return;
         }
-        // Colonnes : symbole | prix | 24 h | sparkline.
-        // Le sparkline prend ce qui reste ; les trois autres ont une largeur
-        // fixe, donc prix et variation sont toujours alignés.
         let sym_w = 7u16;
         let price_w = 13u16;
         let chg_w = 9u16;
         let fixed = sym_w + price_w + chg_w;
         if area.width <= fixed + 3 {
-            // Trop étroit pour la courbe : on n'affiche que les chiffres.
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
@@ -359,21 +303,16 @@ impl Cg {
                 Constraint::Min(6),
             ])
             .split(area);
-        // Mode étendu : les champs sur la 1ʳᵉ ligne, la courbe sur le reste.
         let fields_h = 1;
         self.draw_fields(f, q, &cols[..3], fields_h);
         let spark_area = Rect::new(cols[3].x, cols[3].y, cols[3].width, cols[3].height);
         self.draw_spark(f, q, spark_area);
     }
 
-    /// Les trois champs texte (symbole, prix, variation 24 h).
     fn draw_fields(&self, f: &mut Frame, q: &Quote, cols: &[Rect], height: u16) {
         if cols.len() < 3 {
             return;
         }
-        // Couleur **explicite** : sans fg, le symbole prenait la couleur par
-        // défaut du terminal — claire sur un terminal sombre, donc invisible sur
-        // le fond papier de `paper`. (Même classe de bug que la palette `/`.)
         let sym = Span::styled(
             format!(
                 " {:<width$}",
@@ -416,13 +355,10 @@ impl Cg {
         );
     }
 
-    /// Courbe 7 jours en **braille** (Canvas), sans axes : l'échelle n'a pas
-    /// d'intérêt à cette taille, seule la forme compte.
     fn draw_spark(&self, f: &mut Frame, q: &Quote, area: Rect) {
         if area.width < 4 || area.height == 0 || q.spark.len() < 2 {
             return;
         }
-        // Sous-échantillonnage : la fenêtre graphique n'a que 2×width colonnes.
         let target = (area.width as usize * 2).max(8);
         let pts = downsample(&q.spark, target);
         let lo = pts.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -449,7 +385,6 @@ impl Cg {
     }
 }
 
-/// Réduit une série à `n` points en gardant la forme (moyenne par seau).
 pub fn downsample(series: &[f64], n: usize) -> Vec<f64> {
     if n == 0 || series.is_empty() {
         return Vec::new();
@@ -467,7 +402,6 @@ pub fn downsample(series: &[f64], n: usize) -> Vec<f64> {
     out
 }
 
-/// Réponse `/coins/markets` → quotes. Fonction pure : testable sans réseau.
 pub fn parse_markets(json: &serde_json::Value) -> Vec<Quote> {
     let Some(arr) = json.as_array() else {
         return Vec::new();
@@ -504,7 +438,6 @@ pub fn parse_markets(json: &serde_json::Value) -> Vec<Quote> {
         .collect()
 }
 
-/// URL de la requête (une seule pour toute la liste).
 pub fn markets_url(coins: &[String], vs: &str) -> String {
     format!(
         "https://api.coingecko.com/api/v3/coins/markets?vs_currency={vs}&ids={}&sparkline=true&price_change_percentage=24h",
@@ -540,7 +473,6 @@ mod tests {
 
     #[test]
     fn applying_a_response_follows_the_users_order() {
-        // L'API ne garantit pas l'ordre : c'est la watchlist qui décide.
         let mut cg = Cg::new(vec!["bitcoin".into(), "ethereum".into()]);
         cg.loading = true;
         cg.apply(parse_markets(&json()));
@@ -559,7 +491,6 @@ mod tests {
             change_24h: Some(2.4),
             spark: vec![],
         };
-        // Séparateur de milliers : espace ordinaire (largeur 1, portable).
         assert_eq!(q.price_label(), format!("64{}947 $", ' '));
         assert_eq!(q.change_label(), "+2,4 %");
         assert!(q.is_up());
@@ -599,14 +530,11 @@ mod tests {
         let d = downsample(&series, 24);
         assert_eq!(d.len(), 24);
         assert!(d[0] < d[23], "la tendance doit rester croissante");
-        // Série plus courte que la cible : rendue telle quelle.
         assert_eq!(downsample(&[1.0, 2.0], 24), vec![1.0, 2.0]);
     }
 
     #[test]
     fn the_row_shows_symbol_price_and_change() {
-        // Régression : la ligne n'affichait que le symbole (prix et 24 H vides)
-        // alors que la sparkline, elle, était bien rendue.
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
 
@@ -667,9 +595,6 @@ mod tests {
 
     #[test]
     fn the_symbol_is_coloured_by_the_theme() {
-        // Régression : le symbole était rendu sans couleur explicite, donc avec
-        // la couleur par défaut du terminal — illisible sur le fond clair de
-        // `paper`. On vérifie la couleur réelle de la cellule.
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
 
@@ -708,7 +633,6 @@ mod tests {
 
     #[test]
     fn the_user_agent_is_present_and_versioned() {
-        // Sans agent, CoinGecko répond 403 (mesuré) : ce n'est pas cosmétique.
         assert!(USER_AGENT.starts_with("zer0gh0st/"), "{USER_AGENT}");
         assert!(USER_AGENT.len() > "zer0gh0st/".len(), "{USER_AGENT}");
     }

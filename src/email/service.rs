@@ -1,7 +1,3 @@
-//! Façade haut niveau EmailService.
-//! Combine IMAP (read/manage) et SMTP (write) avec permissions et audit log.
-//! Aucun secret n'est loggué ; le contenu des messages n'apparaît jamais dans l'audit.
-
 use crate::email::config::EmailConfig;
 use crate::email::error::EmailError;
 use crate::email::imap_client::ImapClient;
@@ -12,14 +8,12 @@ use serde_json::json;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
-/// Façade email : permissions + audit + clients IMAP/SMTP.
 pub struct EmailService {
     config: EmailConfig,
     audit_log: PathBuf,
 }
 
 impl EmailService {
-    /// Crée le service. Valide la config et prépare le fichier d'audit.
     pub fn new(config: EmailConfig) -> Result<Self, EmailError> {
         config.validate()?;
         let audit_dir = std::env::var("ZER0_EMAIL_AUDIT_DIR")
@@ -32,12 +26,10 @@ impl EmailService {
         })
     }
 
-    /// Accès à la config (pour les tests).
     pub fn config(&self) -> &EmailConfig {
         &self.config
     }
 
-    /// Écrit une entrée d'audit (jamais de contenu de message ni de secret).
     fn audit(&self, action: &str, details: serde_json::Value) {
         let entry = json!({
             "timestamp": Utc::now().to_rfc3339(),
@@ -55,7 +47,6 @@ impl EmailService {
         }
     }
 
-    /// Vérifie une permission. Les refus sont journalisés dans l'audit.
     fn require(&self, perm: bool, action: &str) -> Result<(), EmailError> {
         if perm {
             Ok(())
@@ -65,12 +56,10 @@ impl EmailService {
         }
     }
 
-    /// Ouvre une session IMAP.
     async fn imap(&self) -> Result<ImapClient, EmailError> {
         ImapClient::new(&self.config).await
     }
 
-    /// Liste les dossiers (read).
     pub async fn list_folders(&self) -> Result<Vec<String>, EmailError> {
         self.require(self.config.allow_read, "list_folders")?;
         let mut imap = self.imap().await?;
@@ -80,7 +69,6 @@ impl EmailService {
         Ok(folders)
     }
 
-    /// Liste les messages d'un dossier (read).
     pub async fn list_messages(
         &self,
         mailbox: &str,
@@ -98,7 +86,6 @@ impl EmailService {
         Ok(messages)
     }
 
-    /// Récupère un message complet (read).
     pub async fn get_message(&self, mailbox: &str, uid: u32) -> Result<EmailMessage, EmailError> {
         self.require(self.config.allow_read, "get_message")?;
         let mut imap = self.imap().await?;
@@ -108,7 +95,6 @@ impl EmailService {
         Ok(message)
     }
 
-    /// Recherche des messages (read).
     pub async fn search(
         &self,
         mailbox: &str,
@@ -126,7 +112,6 @@ impl EmailService {
         Ok(results)
     }
 
-    /// Envoie un email (write).
     pub async fn send(&self, request: SendRequest) -> Result<(), EmailError> {
         self.require(self.config.allow_write, "send")?;
         let smtp = SmtpClient::new(&self.config)?;
@@ -144,7 +129,6 @@ impl EmailService {
         Ok(())
     }
 
-    /// Marque lu/non-lu (manage).
     pub async fn mark_read(&self, mailbox: &str, uid: u32, read: bool) -> Result<(), EmailError> {
         self.require(self.config.allow_manage, "mark_read")?;
         let mut imap = self.imap().await?;
@@ -158,7 +142,6 @@ impl EmailService {
         Ok(())
     }
 
-    /// Déplace un message (manage).
     pub async fn move_message(
         &self,
         mailbox: &str,
@@ -176,7 +159,6 @@ impl EmailService {
         Ok(())
     }
 
-    /// Supprime un message (delete). Expunge explicite uniquement.
     pub async fn delete_message(
         &self,
         mailbox: &str,
@@ -194,7 +176,6 @@ impl EmailService {
         Ok(())
     }
 
-    /// Exécute une action JSON de l'agent.
     pub async fn handle_action(
         &self,
         action: EmailAction,
@@ -231,7 +212,6 @@ impl EmailService {
                 Ok(json!({"status": "sent"}))
             }
             EmailAction::Reply { mailbox, uid, body } => {
-                // Récupère le message original pour construire la réponse.
                 let original = self.get_message(&mailbox, uid).await?;
                 let to =
                     original.summary.from.clone().ok_or_else(|| {
@@ -364,11 +344,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("zer0_email_test_{}", std::process::id()));
         std::env::set_var("ZER0_EMAIL_AUDIT_DIR", &dir);
         let svc = EmailService::new(config_with((false, false, false, false))).unwrap();
-        // Action refusée → audit quand même (via require avant connexion).
         let _ = svc.list_folders().await;
         let log = std::fs::read_to_string(dir.join("email_audit.log")).unwrap();
         assert!(log.contains("list_folders"));
-        assert!(!log.contains("pass")); // jamais de secret
+        assert!(!log.contains("pass"));
         std::env::remove_var("ZER0_EMAIL_AUDIT_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }

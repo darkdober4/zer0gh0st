@@ -1,14 +1,3 @@
-//! Assistant de première connexion.
-//!
-//! Objectif : qu'un nouvel utilisateur puisse aller de « je viens d'installer »
-//! à « l'agent répond » sans lire six documents. Huit étapes, chacune
-//! expliquant **pourquoi** avant **comment**, avec reprise possible (`Échap`
-//! enregistre l'étape, `/setup` reprend).
-//!
-//! Règles : `code_exec` reste désactivé par défaut (choix explicite), les
-//! secrets sont saisis en mode masqué, et le coffre reste au CLI (la passphrase
-//! ne transite pas par le buffer de la TUI).
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
@@ -37,7 +26,6 @@ pub enum Step {
     Exec,
     Commands,
     Done,
-    // ── Assistant email (`/zer0_mail`) ──────────────────────────────────────
     MailHost,
     MailUser,
     MailPassword,
@@ -45,7 +33,6 @@ pub enum Step {
 }
 
 impl Step {
-    /// Index persisté dans `config.toml` (`None` = terminé).
     pub fn idx(self) -> u8 {
         match self {
             Step::Inference => 0,
@@ -53,14 +40,11 @@ impl Step {
             Step::ApiKey => 2,
             Step::Model => 3,
             Step::Telegram => 4,
-            // sous-étape : on reprend à l'écran Telegram, jamais au token
             Step::TelegramToken => 4,
             Step::Thinking => 5,
             Step::Exec => 6,
             Step::Commands => 7,
             Step::Done => 8,
-            // Assistant email : hors de la plage du setup (0-8) pour ne pas
-            // perturber la reprise de `/setup`.
             Step::MailHost => 100,
             Step::MailUser => 101,
             Step::MailPassword => 102,
@@ -128,9 +112,7 @@ pub struct Wizard {
     pub exec: bool,
     pub error: Option<String>,
     pub page: usize,
-    /// Le modèle courant a-t-il été choisi ? (pour l'étape Model en saisie libre)
     pub manual_model: bool,
-    // ── Assistant email (`/zer0_mail`) ──────────────────────────────────────
     pub mail_host: String,
     pub mail_user: String,
     pub mail_pass: String,
@@ -157,7 +139,6 @@ impl Wizard {
     }
 }
 
-/// Ouvre l'assistant (ou le reprend à `step`).
 pub fn start(app: &mut App, ui_tx: &UnboundedSender<UiEvent>, step: Step) {
     app.wizard = Some(Wizard::new(step));
     app.input.clear();
@@ -238,7 +219,6 @@ fn fetch_models(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     });
 }
 
-/// Applique la liste de modèles reçue (appelé depuis `handle_ui`).
 pub fn on_models(app: &mut App, list: Vec<ModelEntry>) {
     if let Some(w) = app.wizard.as_mut() {
         w.models = list;
@@ -402,7 +382,6 @@ const COMMAND_TOUR: &[&str] = &[
     "Entrée pour terminer l'assistant.",
 ];
 
-/// Gère une touche quand l'assistant est ouvert.
 pub fn handle_key(key: KeyEvent, app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
     let Some(w) = app.wizard.as_ref() else {
         return;
@@ -478,7 +457,6 @@ fn activate(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
             if cursor == 0 {
                 next = Some(Step::Provider);
             } else {
-                // local : provider "local", pas de clé
                 if let Some(w) = app.wizard.as_mut() {
                     w.provider = Some("local".to_string());
                 }
@@ -553,7 +531,6 @@ fn activate(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                 .map(|m| m.id.clone())
                 .filter(|id| !id.is_empty());
             let chosen = if let Some(m) = selected {
-                // modèle déjà préfixé par le provider dans la liste ? non : id nu
                 m
             } else if !input.is_empty() {
                 input.clone()
@@ -642,7 +619,6 @@ fn activate(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
                 + 1;
             let w = app.wizard.as_mut().unwrap();
             if w.page + 1 >= pages {
-                // Dernière page : on termine directement (pas d'écran vide).
                 finish(app, ui_tx);
                 return;
             } else {
@@ -653,7 +629,6 @@ fn activate(app: &mut App, ui_tx: &UnboundedSender<UiEvent>) {
             finish(app, ui_tx);
             return;
         }
-        // ── Assistant email (`/zer0_mail`) ──────────────────────────────────
         Step::MailHost => {
             if input.is_empty() {
                 set_error(app, "serveur vide — ex. imap.gmail.com".into());
@@ -750,11 +725,6 @@ fn set_error(app: &mut App, msg: String) {
     }
 }
 
-/// Écrit `~/.config/zer0/mail.env` (0600) et exporte les variables dans le
-/// processus courant pour que l'outil `email` fonctionne sans redémarrage.
-///
-/// SMTP est déduit de l'hôte IMAP : `imap.X` → `smtp.X`, port 465 (TLS
-/// implicite). Sinon on garde le même hôte (Proton Bridge, serveurs locaux).
 fn save_mail_env(host: &str, user: &str, pass: &str) -> std::io::Result<std::path::PathBuf> {
     use std::io::Write;
 
@@ -788,7 +758,6 @@ fn save_mail_env(host: &str, user: &str, pass: &str) -> std::io::Result<std::pat
          export ZER0_EMAIL_ALLOW_DELETE=true\n"
     );
 
-    // Écriture atomique : fichier temporaire 0600 puis rename.
     let tmp = dir.join(".mail.env.tmp");
     {
         let mut f = std::fs::OpenOptions::new()
@@ -806,7 +775,6 @@ fn save_mail_env(host: &str, user: &str, pass: &str) -> std::io::Result<std::pat
     }
     std::fs::rename(&tmp, &path)?;
 
-    // Effet immédiat dans ce processus (l'outil `email` lit `env::var`).
     let vars = [
         ("ZER0_EMAIL_FROM_ADDRESS", user.to_string()),
         ("ZER0_EMAIL_FROM_NAME", "zer0gh0st".to_string()),
@@ -824,17 +792,11 @@ fn save_mail_env(host: &str, user: &str, pass: &str) -> std::io::Result<std::pat
         ("ZER0_EMAIL_ALLOW_DELETE", "true".to_string()),
     ];
     for (k, v) in vars {
-        // SAFETY : mono-thread au moment de la validation (l'agent n'écrit pas
-        // dans l'environnement), et les valeurs viennent de la saisie utilisateur.
         unsafe { std::env::set_var(k, v) };
     }
 
     Ok(path)
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Rendu
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let Some(w) = app.wizard.as_ref() else {
@@ -935,7 +897,6 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
                     .add_modifier(Modifier::BOLD),
             )];
             if app.input.is_empty() {
-                // Champ vide = invisible sans placeholder : c'était le bug.
                 spans.push(Span::styled(
                     "▏",
                     Style::default()
@@ -1054,7 +1015,6 @@ fn mask(text: &str, secret: bool) -> String {
 }
 
 fn command_page(page: usize, _width: usize) -> Vec<Line<'static>> {
-    // Découpe le tour des commandes en pages séparées par « ---- page suivante ---- ».
     let mut pages: Vec<Vec<&str>> = vec![Vec::new()];
     for l in COMMAND_TOUR {
         if l.starts_with("----") {
@@ -1084,7 +1044,6 @@ mod tests {
 
     #[test]
     fn step_indices_roundtrip() {
-        // `TelegramToken` est une sous-étape : elle ne doit jamais être persistée.
         for i in 0..=8u8 {
             let step = Step::from_idx(i);
             assert_ne!(step, Step::TelegramToken);

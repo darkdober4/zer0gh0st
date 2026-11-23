@@ -1,7 +1,3 @@
-//! Client SMTP (write).
-//! Envoi via lettre : texte, HTML, pièces jointes.
-//! Aucun secret n'est loggué.
-
 use crate::email::config::EmailConfig;
 use crate::email::error::EmailError;
 use crate::email::types::{AttachmentInput, SendRequest};
@@ -12,7 +8,6 @@ use lettre::transport::smtp::client::{Tls, TlsParameters};
 use lettre::{Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use tracing::debug;
 
-/// Client SMTP avec transport pré-configuré.
 pub struct SmtpClient {
     transport: AsyncSmtpTransport<Tokio1Executor>,
     from_name: Option<String>,
@@ -20,8 +15,6 @@ pub struct SmtpClient {
 }
 
 impl SmtpClient {
-    /// Crée le transport SMTP (sans connexion réseau).
-    /// Port 465 : TLS implicite (Wrapper). Autres ports : STARTTLS requis.
     pub fn new(config: &EmailConfig) -> Result<Self, EmailError> {
         let credentials = Credentials::new(config.smtp_user.clone(), config.smtp_password.clone());
 
@@ -51,18 +44,15 @@ impl SmtpClient {
         })
     }
 
-    /// Valide une adresse email et la convertit en Mailbox.
     pub fn parse_mailbox(addr: &str) -> Result<Mailbox, EmailError> {
         addr.parse::<Mailbox>()
             .map_err(|e| EmailError::InvalidAddress(format!("'{}': {}", addr, e)))
     }
 
-    /// Valide une liste d'adresses.
     pub fn parse_addresses(addrs: &[String]) -> Result<Vec<Mailbox>, EmailError> {
         addrs.iter().map(|a| Self::parse_mailbox(a)).collect()
     }
 
-    /// Ajoute les pièces jointes à un multipart mixte.
     fn with_attachments(
         mut mixed: MultiPart,
         attachments: &[AttachmentInput],
@@ -80,7 +70,6 @@ impl SmtpClient {
         Ok(mixed)
     }
 
-    /// Construit le message lettre à partir d'une SendRequest (sans envoi).
     pub fn build_message(&self, request: &SendRequest) -> Result<Message, EmailError> {
         if request.to.is_empty() {
             return Err(EmailError::InvalidAddress(
@@ -163,7 +152,6 @@ impl SmtpClient {
         .map_err(|e| EmailError::Smtp(format!("Construction du message échouée: {}", e)))
     }
 
-    /// Envoie un email.
     pub async fn send(&self, request: &SendRequest) -> Result<(), EmailError> {
         let message = self.build_message(request)?;
         self.transport

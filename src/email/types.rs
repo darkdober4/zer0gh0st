@@ -1,8 +1,5 @@
-//! Structures de données principales du module email.
-
 use serde::{Deserialize, Serialize};
 
-/// Résumé d'un message (listage, recherche).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailSummary {
     pub uid: u32,
@@ -15,7 +12,6 @@ pub struct EmailSummary {
     pub snippet: Option<String>,
 }
 
-/// Message complet avec corps et métadonnées des pièces jointes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailMessage {
     pub summary: EmailSummary,
@@ -25,7 +21,6 @@ pub struct EmailMessage {
     pub attachments: Vec<AttachmentMeta>,
 }
 
-/// Métadonnées d'une pièce jointe (sans le contenu binaire par défaut).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentMeta {
     pub filename: Option<String>,
@@ -33,7 +28,6 @@ pub struct AttachmentMeta {
     pub size: Option<usize>,
 }
 
-/// Requête d'envoi d'email.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendRequest {
     pub to: Vec<String>,
@@ -45,7 +39,6 @@ pub struct SendRequest {
     pub attachments: Vec<AttachmentInput>,
 }
 
-/// Pièce jointe à envoyer (contenu binaire inclus).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentInput {
     pub filename: String,
@@ -53,7 +46,6 @@ pub struct AttachmentInput {
     pub bytes: Vec<u8>,
 }
 
-/// Actions exposées à l'agent via JSON.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum EmailAction {

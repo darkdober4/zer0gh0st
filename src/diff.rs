@@ -1,37 +1,7 @@
-//! Diff ligne à ligne pour montrer ce que `text_editor` a **réellement** changé.
-//!
-//! Pourquoi ici plutôt que dans le rendu : l'outil a l'avant et l'après en main,
-//! la TUI n'a que du texte. Calculer le diff dans l'outil évite toute lecture de
-//! fichier en plus (et tout I/O par frame).
-//!
-//! Le format sorti est du **diff unifié** lisible tel quel :
-//!
-//! ```text
-//! @@ -58,8 +58,10 @@
-//!    58    options: ChatOptions,
-//!   - 61      crate::cancel::clear();
-//!   + 61      // B5 : le drapeau n'est remis à zéro que pour un tour…
-//! ```
-//!
-//! Choix assumés :
-//! - **CRLF normalisé** avant comparaison : sinon un fichier Windows réécrit à
-//!   l'identique apparaît entièrement modifié (faux « tout a changé »).
-//! - **Préfixe/suffixe communs retirés** avant l'alignement : une retouche de
-//!   3 lignes dans un fichier de 1000 lignes ne coûte pas 1000×1000 cellules de
-//!   programmation dynamique.
-//! - **Plafond dur** : au-delà de `MAX_DP_LINES`, on renonce à l'alignement fin
-//!   (mémoire quadratique) et on signale un remplacement de bloc.
-//! - Aucune dépendance ajoutée.
-
-/// Nombre de lignes de contexte autour de chaque changement.
 pub const CONTEXT: usize = 3;
 
-/// Au-delà de cette taille (après retrait du préfixe/suffixe commun), on renonce
-/// à l'alignement optimal : `n × m` entiers coûterait des centaines de Mo sur un
-/// fichier de 20 000 lignes.
 const MAX_DP_LINES: usize = 2000;
 
-/// Statistiques d'un diff (ce qu'on affiche même replié).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Stats {
     pub added: usize,
@@ -39,7 +9,6 @@ pub struct Stats {
 }
 
 impl Stats {
-    /// `(+3 / -1)`, ou vide quand rien n'a changé.
     pub fn label(&self) -> String {
         if self.is_empty() {
             return String::new();
@@ -51,10 +20,6 @@ impl Stats {
         self.added == 0 && self.removed == 0
     }
 
-    /// Réécriture : beaucoup d'ajouts **et** beaucoup de suppressions.
-    ///
-    /// C'est le signal qui compte pour l'utilisateur : un modèle qui « corrige »
-    /// en réécrivant tout le fichier. On le nomme au lieu de le laisser deviner.
     pub fn looks_like_rewrite(&self) -> bool {
         let max = self.added.max(self.removed);
         let min = self.added.min(self.removed);
@@ -62,7 +27,6 @@ impl Stats {
     }
 }
 
-/// Nature d'une ligne de diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Added,
@@ -71,7 +35,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// Préfixe affiché (`+`, `-`, ` `) ; l'en-tête `@@` est en contexte.
     pub fn marker(self) -> char {
         match self {
             Kind::Added => '+',
@@ -87,12 +50,10 @@ pub struct DiffLine {
     pub text: String,
 }
 
-/// Résultat complet : lignes de diff (en-têtes `@@` compris) + statistiques.
 #[derive(Debug, Clone, Default)]
 pub struct Diff {
     pub lines: Vec<DiffLine>,
     pub stats: Stats,
-    /// Nombre de lignes réellement changées, avant plafonnement d'affichage.
     pub changed: usize,
 }
 
@@ -101,10 +62,6 @@ impl Diff {
         self.stats.is_empty()
     }
 
-    /// Rendu `text/diff` prêt à mettre dans un bloc ```diff```.
-    ///
-    /// `max` plafonne le nombre de lignes **affichées** ; les lignes en trop sont
-    /// remplacées par un marqueur explicite (on ne tronque jamais en silence).
     pub fn render(&self, max: usize) -> String {
         let mut out = String::new();
         let mut shown = 0usize;
@@ -117,7 +74,6 @@ impl Diff {
             if !out.is_empty() {
                 out.push('\n');
             }
-            // L'en-tête `@@` n'a pas de préfixe dans un diff unifié.
             if line.text.starts_with("@@") {
                 out.push_str(&line.text);
             } else {
@@ -134,17 +90,8 @@ impl Diff {
     }
 }
 
-/// Combien de lignes de diff un **modèle** reçoit dans un résultat d'outil.
-///
-/// L'utilisateur voit le diff complet (40 lignes repliables) ; le modèle n'a
-/// aucun besoin de relire ce qu'il vient d'écrire. Garder 40 lignes dans le
-/// contexte coûtait ~400 tokens par écriture, pour rien.
 pub const MODEL_MAX_LINES: usize = 12;
 
-/// Réduit les blocs ```diff``` d'un texte à `max` lignes de contenu.
-///
-/// Tout le reste du texte (et les autres blocs de code) est laissé intact :
-/// cette fonction ne sert qu'à préparer la copie envoyée au modèle.
 pub fn cap_diff_blocks(text: &str, max: usize) -> String {
     if !text.contains("```diff") {
         return text.to_string();
@@ -186,8 +133,6 @@ pub fn cap_diff_blocks(text: &str, max: usize) -> String {
     out.join("\n")
 }
 
-/// Normalise les fins de ligne : un fichier réécrit avec les mêmes lignes en
-/// CRLF ne doit **pas** apparaître entièrement modifié.
 fn normalize(text: &str) -> Vec<String> {
     text.replace("\r\n", "\n")
         .lines()
@@ -195,12 +140,10 @@ fn normalize(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Diff unifié entre `old` et `new`.
 pub fn unified(old: &str, new: &str) -> Diff {
     let a = normalize(old);
     let b = normalize(new);
 
-    // 1. Retirer les lignes communes de tête et de queue.
     let mut start = 0usize;
     while start < a.len() && start < b.len() && a[start] == b[start] {
         start += 1;
@@ -218,7 +161,6 @@ pub fn unified(old: &str, new: &str) -> Diff {
         return Diff::default();
     }
 
-    // 2. Alignement du milieu (LCS) — ou remplacement de bloc si trop gros.
     let mid: Vec<(Kind, String)> = if mid_a.len() > MAX_DP_LINES || mid_b.len() > MAX_DP_LINES {
         let mut ops = Vec::with_capacity(mid_a.len() + mid_b.len());
         ops.extend(mid_a.iter().map(|l| (Kind::Removed, l.clone())));
@@ -228,7 +170,6 @@ pub fn unified(old: &str, new: &str) -> Diff {
         lcs_ops(mid_a, mid_b)
     };
 
-    // 3. Reconstitue le fichier complet, puis ne garde que les hunks utiles.
     let mut ops: Vec<(Kind, String)> = Vec::with_capacity(a.len() + mid.len());
     ops.extend(a[..start].iter().map(|l| (Kind::Context, l.clone())));
     ops.extend(mid);
@@ -251,8 +192,6 @@ pub fn unified(old: &str, new: &str) -> Diff {
         }
     }
 
-    // Positions cumulées : nombre de lignes avant l'indice `i` dans l'ancien et
-    // dans le nouveau fichier (sert aux en-têtes `@@ -a,n +b,m @@`).
     let mut old_pos = Vec::with_capacity(ops.len() + 1);
     let mut new_pos = Vec::with_capacity(ops.len() + 1);
     let (mut o, mut n) = (0usize, 0usize);
@@ -271,7 +210,6 @@ pub fn unified(old: &str, new: &str) -> Diff {
     old_pos.push(o);
     new_pos.push(n);
 
-    // Regroupe les changements proches (±CONTEXT lignes de contexte).
     let mut groups: Vec<(usize, usize)> = Vec::new();
     for (i, (kind, _)) in ops.iter().enumerate() {
         if *kind == Kind::Context {
@@ -289,8 +227,6 @@ pub fn unified(old: &str, new: &str) -> Diff {
     for (from, to) in groups {
         let old_count = old_pos[to + 1] - old_pos[from];
         let new_count = new_pos[to + 1] - new_pos[from];
-        // Convention diff : un côté vide s'écrit `-0,0` (création) ou `+0,0`
-        // (suppression), pas `-1,0`.
         let old_start = if old_count == 0 {
             old_pos[from]
         } else {
@@ -320,7 +256,6 @@ pub fn unified(old: &str, new: &str) -> Diff {
     }
 }
 
-/// Alignement LCS classique, rendu en opérations (contexte / ajout / suppression).
 fn lcs_ops(a: &[String], b: &[String]) -> Vec<(Kind, String)> {
     let (n, m) = (a.len(), b.len());
     let mut dp = vec![vec![0u32; m + 1]; n + 1];
@@ -409,7 +344,6 @@ mod tests {
 
     #[test]
     fn crlf_rewrite_of_the_same_text_is_not_a_change() {
-        // Le piège Windows : mêmes lignes, fins de ligne différentes.
         let d = unified("a\nb\nc\n", "a\r\nb\r\nc\r\n");
         assert!(
             d.is_empty(),
@@ -432,7 +366,6 @@ mod tests {
                 removed: 1
             }
         );
-        // En-tête + 3 lignes avant + 1 - + 1 + + 3 après = 9.
         assert!(d.lines.len() <= 10, "trop de lignes : {}", d.lines.len());
         let out = d.render(0);
         assert!(out.contains("l25-modifiee"));
@@ -464,14 +397,12 @@ mod tests {
     fn only_diff_fences_are_capped() {
         let text = "Remplacement (+3 / -1)\n```rust\nfn a() {}\n```\n```diff\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n```\nfin";
         let capped = cap_diff_blocks(text, 2);
-        // 2 lignes de diff gardées, le reste annoncé.
         assert!(capped.contains("@@ -1,2 +1,2 @@\n a"), "{capped}");
         assert!(capped.contains("2 ligne(s) de diff omises"), "{capped}");
         assert!(
             !capped.contains("+c"),
             "ligne au-delà du plafond conservée : {capped}"
         );
-        // Le bloc rust et la prose sont intacts.
         assert!(capped.contains("fn a() {}"), "{capped}");
         assert!(capped.starts_with("Remplacement (+3 / -1)"), "{capped}");
         assert!(capped.ends_with("fin"), "{capped}");
@@ -496,13 +427,11 @@ mod tests {
             removed: 38,
         };
         assert!(big.looks_like_rewrite());
-        // Une vraie retouche ne crie pas au loup.
         let small = Stats {
             added: 4,
             removed: 2,
         };
         assert!(!small.looks_like_rewrite());
-        // Un ajout massif sans suppression non plus.
         let add = Stats {
             added: 60,
             removed: 0,
